@@ -195,6 +195,11 @@ async def stripe_webhook(
 
     payload = await request.body()
 
+    # Debug logging for webhook signature
+    logger.info(f"Webhook signature (first 40 chars): {stripe_signature[:40] if stripe_signature else 'None'}...")
+    logger.info(f"Expected webhook secret (first 20 chars): {settings.STRIPE_WEBHOOK_SECRET[:20]}...")
+    logger.info(f"Payload size: {len(payload)} bytes")
+
     try:
         event = stripe.Webhook.construct_event(
             payload, stripe_signature, settings.STRIPE_WEBHOOK_SECRET
@@ -205,8 +210,8 @@ async def stripe_webhook(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid payload",
         )
-    except stripe.error.SignatureVerificationError:
-        logger.error("Invalid webhook signature")
+    except stripe.error.SignatureVerificationError as e:
+        logger.error(f"Invalid webhook signature: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid signature",
