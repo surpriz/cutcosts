@@ -10,6 +10,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.api.deps import get_current_active_user, get_db
 from app.core.config import settings
+from app.core.subscription_dependencies import require_ai_chat_access
 from app.crud import chat as chat_crud
 from app.models.chat import ChatConversation, ChatMessage
 from app.models.user import User
@@ -29,7 +30,7 @@ router = APIRouter()
 async def create_conversation(
     conversation_data: ChatConversationCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_ai_chat_access)],
 ) -> ChatConversationResponse:
     """
     Create a new chat conversation.
@@ -50,7 +51,7 @@ async def create_conversation(
 @router.get("/conversations", response_model=list[ChatConversationListItem])
 async def list_conversations(
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_ai_chat_access)],
     skip: int = 0,
     limit: int = 20,
 ) -> list[ChatConversationListItem]:
@@ -149,7 +150,7 @@ async def send_message(
     conversation_id: uuid.UUID,
     message_data: ChatMessageCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_ai_chat_access)],
 ) -> EventSourceResponse:
     """
     Send a message and stream the AI response using Server-Sent Events.

@@ -57,12 +57,14 @@ async def create_scan(
             detail="Cloud account is inactive",
         )
 
-    # Create scan record
-    scan = await scan_crud.create_scan(db, scan_in)
-
-    # Increment scan usage counter
+    # Increment scan usage counter BEFORE creating scan to prevent race condition
+    # This ensures parallel requests cannot bypass the limit check
     subscription_service = SubscriptionService(db)
     await subscription_service.increment_scan_usage(current_user.id)
+    await db.commit()  # Commit immediately to persist the counter
+
+    # Create scan record
+    scan = await scan_crud.create_scan(db, scan_in)
 
     # Ensure database transaction is fully committed before queuing task
     await db.commit()

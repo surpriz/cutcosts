@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_active_user, get_db
+from app.core.subscription_dependencies import require_impact_tracking_access
 from app.crud import impact as impact_crud
 from app.models.user import User
 from app.schemas.impact import (
@@ -21,7 +22,7 @@ router = APIRouter()
 @router.get("/summary", response_model=ImpactSummary)
 async def get_impact_summary(
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_impact_tracking_access)],
 ) -> ImpactSummary:
     """
     Get comprehensive impact summary for user.
@@ -52,7 +53,7 @@ async def get_impact_summary(
 @router.get("/timeline", response_model=ImpactTimeline)
 async def get_impact_timeline(
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_impact_tracking_access)],
     period: str = Query(
         "month",
         description="Period grouping: 'day', 'week', 'month', 'year', 'all'",
@@ -88,7 +89,7 @@ async def get_impact_timeline(
 @router.get("/achievements", response_model=UserAchievements)
 async def get_user_achievements(
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_impact_tracking_access)],
 ) -> UserAchievements:
     """
     Get user achievements and badges (gamification).
@@ -125,7 +126,7 @@ async def get_user_achievements(
 @router.get("/quick-stats", response_model=QuickStats)
 async def get_quick_stats(
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_impact_tracking_access)],
 ) -> QuickStats:
     """
     Get quick interesting statistics for user.

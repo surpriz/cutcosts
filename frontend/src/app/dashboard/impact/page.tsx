@@ -3,10 +3,12 @@
 import { useEffect, useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useImpactStore } from "@/stores/useImpactStore";
+import useSubscriptionStore from "@/stores/useSubscriptionStore";
+import { UpgradeDialog } from "@/components/subscription/UpgradeDialog";
 import {
   DollarSign, Leaf, TrendingUp, Award, Zap, Target,
   Calendar, TreePine, Car, Home, Sparkles, Trophy,
-  BarChart3, TrendingDown, Activity, Lock, Check, RefreshCw
+  BarChart3, TrendingDown, Activity, Lock, Check, RefreshCw, Loader2
 } from "lucide-react";
 import type { TimelineDataPoint } from "@/types/impact";
 
@@ -255,6 +257,7 @@ const ResourceTypeBreakdown = ({
 // Main Page Component
 export default function ImpactDashboardPage() {
   const router = useRouter();
+  const { subscription, fetchCurrentSubscription } = useSubscriptionStore();
   const {
     summary,
     timeline,
@@ -267,11 +270,31 @@ export default function ImpactDashboardPage() {
   } = useImpactStore();
 
   const [selectedPeriod, setSelectedPeriod] = useState<"day" | "week" | "month" | "year" | "all">("month");
+  const [isCheckingAccess, setIsCheckingAccess] = useState(true);
+  const [showUpgradeDialog, setShowUpgradeDialog] = useState(false);
 
-  // Fetch all data on mount and when period changes
+  // Check subscription access on mount
   useEffect(() => {
-    fetchAll(selectedPeriod);
-  }, [selectedPeriod, fetchAll]);
+    const checkAccess = async () => {
+      await fetchCurrentSubscription();
+      setIsCheckingAccess(false);
+    };
+    checkAccess();
+  }, [fetchCurrentSubscription]);
+
+  // Check if user has Pro/Enterprise plan
+  useEffect(() => {
+    if (!isCheckingAccess && subscription?.plan.name === "free") {
+      setShowUpgradeDialog(true);
+    }
+  }, [isCheckingAccess, subscription]);
+
+  // Fetch all data on mount and when period changes (only if not Free)
+  useEffect(() => {
+    if (!isCheckingAccess && subscription?.plan.name !== "free") {
+      fetchAll(selectedPeriod);
+    }
+  }, [selectedPeriod, fetchAll, isCheckingAccess, subscription]);
 
   // Memoized calculations
   const sortedResourceTypes = useMemo(() => {
@@ -289,6 +312,30 @@ export default function ImpactDashboardPage() {
   const totalResourceTypeCost = useMemo(() => {
     return sortedResourceTypes.reduce((sum, item) => sum + item.monthlyCost, 0);
   }, [sortedResourceTypes]);
+
+  // Checking access state
+  if (isCheckingAccess) {
+    return (
+      <div className="flex h-[calc(100vh-4rem)] items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+      </div>
+    );
+  }
+
+  // Show paywall for Free users
+  if (subscription?.plan.name === "free") {
+    return (
+      <UpgradeDialog
+        open={showUpgradeDialog}
+        onOpenChange={(open) => {
+          if (!open) {
+            router.push("/dashboard");
+          }
+        }}
+        reason="impact_tracking"
+      />
+    );
+  }
 
   // Loading State
   if (isLoading && !summary) {
