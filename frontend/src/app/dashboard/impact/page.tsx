@@ -257,7 +257,7 @@ const ResourceTypeBreakdown = ({
 // Main Page Component
 export default function ImpactDashboardPage() {
   const router = useRouter();
-  const { subscription, fetchCurrentSubscription } = useSubscriptionStore();
+  const { currentSubscription, fetchCurrentSubscription } = useSubscriptionStore();
   const {
     summary,
     timeline,
@@ -284,17 +284,17 @@ export default function ImpactDashboardPage() {
 
   // Check if user has Pro/Enterprise plan
   useEffect(() => {
-    if (!isCheckingAccess && subscription?.plan.name === "free") {
+    if (!isCheckingAccess && currentSubscription?.plan.name === "free") {
       setShowUpgradeDialog(true);
     }
-  }, [isCheckingAccess, subscription]);
+  }, [isCheckingAccess, currentSubscription]);
 
   // Fetch all data on mount and when period changes (only if not Free)
   useEffect(() => {
-    if (!isCheckingAccess && subscription?.plan.name !== "free") {
+    if (!isCheckingAccess && currentSubscription?.plan.name !== "free") {
       fetchAll(selectedPeriod);
     }
-  }, [selectedPeriod, fetchAll, isCheckingAccess, subscription]);
+  }, [selectedPeriod, fetchAll, isCheckingAccess, currentSubscription]);
 
   // Memoized calculations
   const sortedResourceTypes = useMemo(() => {
@@ -314,7 +314,7 @@ export default function ImpactDashboardPage() {
   }, [sortedResourceTypes]);
 
   // Show loading while checking subscription
-  if (isCheckingAccess || !subscription) {
+  if (isCheckingAccess || !currentSubscription) {
     return (
       <div className="flex h-[calc(100vh-4rem)] items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
@@ -323,7 +323,7 @@ export default function ImpactDashboardPage() {
   }
 
   // Show paywall for Free users
-  if (subscription.plan.name === "free") {
+  if (currentSubscription.plan.name === "free") {
     return (
       <UpgradeDialog
         open={showUpgradeDialog}

@@ -16,7 +16,7 @@ import Link from "next/link";
 
 export default function AssistantPage() {
   const router = useRouter();
-  const { subscription, fetchCurrentSubscription } = useSubscriptionStore();
+  const { currentSubscription, fetchCurrentSubscription } = useSubscriptionStore();
   const [isLoading, setIsLoading] = useState(true);
   const [showUpgradeDialog, setShowUpgradeDialog] = useState(false);
 
@@ -30,13 +30,13 @@ export default function AssistantPage() {
 
   // Check if user has Pro/Enterprise plan
   useEffect(() => {
-    if (!isLoading && subscription?.plan.name === "free") {
+    if (!isLoading && currentSubscription?.plan.name === "free") {
       setShowUpgradeDialog(true);
     }
-  }, [isLoading, subscription]);
+  }, [isLoading, currentSubscription]);
 
   // Show loading while checking subscription
-  if (isLoading || !subscription) {
+  if (isLoading || !currentSubscription) {
     return (
       <div className="flex h-[calc(100vh-4rem)] items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
@@ -45,7 +45,7 @@ export default function AssistantPage() {
   }
 
   // Show paywall for Free users
-  if (subscription.plan.name === "free") {
+  if (currentSubscription.plan.name === "free") {
     return (
       <UpgradeDialog
         open={showUpgradeDialog}
