@@ -409,12 +409,25 @@ class SubscriptionService:
         return True, None
 
     async def increment_scan_usage(self, user_id: UUID) -> None:
-        """Increment scan usage counter for user.
+        """Increment scan usage counter for user with database lock.
+
+        Uses SELECT FOR UPDATE to prevent race conditions when multiple
+        scans are launched simultaneously.
 
         Args:
             user_id: User ID
         """
-        subscription = await self.get_user_subscription(user_id)
+        # Use SELECT FOR UPDATE to lock the row and prevent race conditions
+        result = await self.db.execute(
+            select(UserSubscription)
+            .where(
+                UserSubscription.user_id == user_id,
+                UserSubscription.status == "active",
+            )
+            .with_for_update()  # PostgreSQL row-level lock
+        )
+        subscription = result.scalar_one_or_none()
+
         if subscription:
             subscription.scans_used_this_month += 1
             await self.db.commit()
