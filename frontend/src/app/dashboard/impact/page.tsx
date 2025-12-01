@@ -313,8 +313,8 @@ export default function ImpactDashboardPage() {
     return sortedResourceTypes.reduce((sum, item) => sum + item.monthlyCost, 0);
   }, [sortedResourceTypes]);
 
-  // Checking access state
-  if (isCheckingAccess) {
+  // Show loading while checking subscription
+  if (isCheckingAccess || !subscription) {
     return (
       <div className="flex h-[calc(100vh-4rem)] items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
@@ -323,7 +323,7 @@ export default function ImpactDashboardPage() {
   }
 
   // Show paywall for Free users
-  if (subscription?.plan.name === "free") {
+  if (subscription.plan.name === "free") {
     return (
       <UpgradeDialog
         open={showUpgradeDialog}

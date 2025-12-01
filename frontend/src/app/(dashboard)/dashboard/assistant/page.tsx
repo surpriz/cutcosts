@@ -35,7 +35,8 @@ export default function AssistantPage() {
     }
   }, [isLoading, subscription]);
 
-  if (isLoading) {
+  // Show loading while checking subscription
+  if (isLoading || !subscription) {
     return (
       <div className="flex h-[calc(100vh-4rem)] items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
@@ -43,7 +44,8 @@ export default function AssistantPage() {
     );
   }
 
-  if (subscription?.plan.name === "free") {
+  // Show paywall for Free users
+  if (subscription.plan.name === "free") {
     return (
       <UpgradeDialog
         open={showUpgradeDialog}
@@ -57,6 +59,7 @@ export default function AssistantPage() {
     );
   }
 
+  // Only render chat components if Pro/Enterprise
   return (
     <div className="flex h-[calc(100vh-4rem)] bg-gray-900">
       <ChatSidebar />
