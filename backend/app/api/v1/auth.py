@@ -11,12 +11,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_active_user, get_db
 from app.core.config import settings
 from app.core.rate_limit import auth_login_limit, auth_refresh_limit, auth_register_limit, limiter
-from app.core.security import create_access_token, create_refresh_token, decode_token
+from app.core.security import create_access_token, create_refresh_token, decode_token, verify_password
 from app.crud import user as user_crud
 from app.models.user import User
 from app.schemas.token import RefreshTokenRequest, Token
 from app.schemas.user import User as UserSchema
-from app.schemas.user import UserCreate, UserUpdate
+from app.schemas.user import (
+    ForgotPasswordRequest,
+    PasswordChangeRequest,
+    ResetPasswordRequest,
+    UserCreate,
+    UserUpdate,
+)
 from app.services import email_service
 from app.services.subscription_service import SubscriptionService
 
@@ -425,3 +431,145 @@ async def update_current_user(
     )
 
     return updated_user
+
+
+@router.post("/forgot-password")
+@auth_register_limit  # Same rate limit as register to prevent abuse
+async def forgot_password(
+    request: Request,
+    response: Response,
+    forgot_request: ForgotPasswordRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict[str, str]:
+    """
+    Request password reset email.
+
+    Always returns success to prevent email enumeration attacks.
+
+    Args:
+        forgot_request: Forgot password request with email
+        db: Database session
+
+    Returns:
+        Success message (always, even if email doesn't exist)
+    """
+    # Get user by email
+    user = await user_crud.get_user_by_email(db, forgot_request.email)
+
+    if user and user.email_verified:
+        # Generate password reset token
+        reset_token = await user_crud.set_password_reset_token(db, user)
+
+        # Send password reset email
+        email_sent = email_service.send_password_reset_email(
+            email=user.email,
+            full_name=user.full_name or "User",
+            reset_token=reset_token,
+        )
+
+        if email_sent:
+            logger.info(
+                "auth.password_reset_requested",
+                user_id=str(user.id),
+                email=user.email,
+            )
+        else:
+            logger.error(
+                "auth.password_reset_email_failed",
+                user_id=str(user.id),
+                email=user.email,
+            )
+    else:
+        # Log for monitoring but don't reveal to user
+        logger.info(
+            "auth.password_reset_requested_unknown",
+            email=forgot_request.email,
+        )
+
+    # Always return success to prevent email enumeration
+    return {
+        "message": "If an account with this email exists, a password reset link has been sent.",
+    }
+
+
+@router.post("/reset-password")
+async def reset_password(
+    reset_request: ResetPasswordRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict[str, str]:
+    """
+    Reset password using token from email.
+
+    Args:
+        reset_request: Reset password request with token and new password
+        db: Database session
+
+    Returns:
+        Success message
+
+    Raises:
+        HTTPException: If token is invalid or expired
+    """
+    # Get user by reset token
+    user = await user_crud.get_user_by_password_reset_token(db, reset_request.token)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired password reset token",
+        )
+
+    # Reset password
+    await user_crud.reset_user_password(db, user, reset_request.new_password)
+
+    logger.info(
+        "auth.password_reset_completed",
+        user_id=str(user.id),
+        email=user.email,
+    )
+
+    return {
+        "message": "Password reset successfully. You can now login with your new password.",
+    }
+
+
+@router.post("/change-password")
+async def change_password(
+    change_request: PasswordChangeRequest,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict[str, str]:
+    """
+    Change password for authenticated user.
+
+    Requires current password verification before changing.
+
+    Args:
+        change_request: Change password request with current and new password
+        current_user: Current authenticated user
+        db: Database session
+
+    Returns:
+        Success message
+
+    Raises:
+        HTTPException: If current password is incorrect
+    """
+    # Verify current password
+    if not verify_password(change_request.current_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect",
+        )
+
+    # Update password
+    await user_crud.reset_user_password(db, current_user, change_request.new_password)
+
+    logger.info(
+        "auth.password_changed",
+        user_id=str(current_user.id),
+        email=current_user.email,
+    )
+
+    return {
+        "message": "Password changed successfully.",
+    }

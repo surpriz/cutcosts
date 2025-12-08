@@ -90,6 +90,9 @@ class Settings(BaseSettings):
     UNVERIFIED_ACCOUNT_CLEANUP_DAYS: int = 14  # Auto-delete after 14 days
     FRONTEND_URL: str = "http://localhost:3000"
 
+    # Password reset
+    PASSWORD_RESET_TOKEN_EXPIRE_HOURS: int = 1  # 1 hour (security best practice)
+
     # AWS (Optional - for testing)
     AWS_ACCESS_KEY_ID: str = ""
     AWS_SECRET_ACCESS_KEY: str = ""

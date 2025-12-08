@@ -854,3 +854,161 @@ def send_scan_summary_email(
         html_content=html_content,
         text_content=text_content,
     )
+
+
+def get_password_reset_email_html(full_name: str, reset_url: str) -> str:
+    """
+    Get HTML template for password reset email.
+
+    Args:
+        full_name: User's full name
+        reset_url: URL for password reset
+
+    Returns:
+        HTML email content
+    """
+    return f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reset your password - CutCosts</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6;">
+    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f3f4f6;">
+        <tr>
+            <td align="center" style="padding: 40px 20px;">
+                <table width="600" border="0" cellspacing="0" cellpadding="0" style="background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    <!-- Header -->
+                    <tr>
+                        <td style="padding: 40px 40px 20px; text-align: center;">
+                            <h1 style="margin: 0; color: #1f2937; font-size: 28px; font-weight: 700;">
+                                CutCosts
+                            </h1>
+                            <p style="margin: 10px 0 0; color: #6b7280; font-size: 14px;">
+                                Cloud Cost Optimization
+                            </p>
+                        </td>
+                    </tr>
+
+                    <!-- Content -->
+                    <tr>
+                        <td style="padding: 20px 40px;">
+                            <h2 style="margin: 0 0 20px; color: #1f2937; font-size: 22px; font-weight: 600;">
+                                Password Reset Request
+                            </h2>
+                            <p style="margin: 0 0 15px; color: #374151; font-size: 16px; line-height: 1.6;">
+                                Hello {full_name},
+                            </p>
+                            <p style="margin: 0 0 15px; color: #374151; font-size: 16px; line-height: 1.6;">
+                                We received a request to reset your password for your <strong>CutCosts</strong> account. Click the button below to create a new password:
+                            </p>
+
+                            <!-- CTA Button -->
+                            <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin: 30px 0;">
+                                <tr>
+                                    <td align="center">
+                                        <a href="{reset_url}" style="display: inline-block; padding: 14px 32px; background-color: #2563eb; color: #ffffff; text-decoration: none; border-radius: 6px; font-size: 16px; font-weight: 600;">
+                                            Reset my password
+                                        </a>
+                                    </td>
+                                </tr>
+                            </table>
+
+                            <p style="margin: 20px 0 10px; color: #6b7280; font-size: 14px; line-height: 1.6;">
+                                Or copy this link in your browser:
+                            </p>
+                            <p style="margin: 0; color: #2563eb; font-size: 13px; word-break: break-all;">
+                                {reset_url}
+                            </p>
+
+                            <!-- Expiration notice -->
+                            <div style="margin: 30px 0; padding: 16px; background-color: #fef3c7; border-left: 4px solid #f59e0b; border-radius: 4px;">
+                                <p style="margin: 0; color: #92400e; font-size: 14px;">
+                                    <strong>This link expires in 1 hour.</strong><br>
+                                    For security reasons, please reset your password as soon as possible.
+                                </p>
+                            </div>
+
+                            <p style="margin: 20px 0 0; color: #6b7280; font-size: 14px; line-height: 1.6;">
+                                If you didn't request a password reset, you can safely ignore this email. Your password will remain unchanged.
+                            </p>
+                        </td>
+                    </tr>
+
+                    <!-- Footer -->
+                    <tr>
+                        <td style="padding: 30px 40px; background-color: #f9fafb; border-top: 1px solid #e5e7eb; border-radius: 0 0 8px 8px;">
+                            <p style="margin: 0; color: #9ca3af; font-size: 12px; text-align: center; line-height: 1.5;">
+                                This email was sent by <strong>CutCosts</strong><br>
+                                2025 CutCosts. All rights reserved.
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>
+"""
+
+
+def get_password_reset_email_text(full_name: str, reset_url: str) -> str:
+    """
+    Get plain text version for password reset email.
+
+    Args:
+        full_name: User's full name
+        reset_url: URL for password reset
+
+    Returns:
+        Plain text email content
+    """
+    return f"""
+Password Reset Request
+
+Hello {full_name},
+
+We received a request to reset your password for your CutCosts account. Click the link below to create a new password:
+
+{reset_url}
+
+This link expires in 1 hour. For security reasons, please reset your password as soon as possible.
+
+If you didn't request a password reset, you can safely ignore this email. Your password will remain unchanged.
+
+---
+This email was sent by CutCosts
+2025 CutCosts. All rights reserved.
+"""
+
+
+def send_password_reset_email(
+    email: str,
+    full_name: str,
+    reset_token: str,
+) -> bool:
+    """
+    Send password reset email to user.
+
+    Args:
+        email: User email address
+        full_name: User's full name
+        reset_token: Password reset token
+
+    Returns:
+        True if email sent successfully, False otherwise
+    """
+    reset_url = f"{settings.FRONTEND_URL}/auth/reset-password/{reset_token}"
+
+    html_content = get_password_reset_email_html(full_name or "User", reset_url)
+    text_content = get_password_reset_email_text(full_name or "User", reset_url)
+
+    return send_email(
+        to_email=email,
+        subject="Reset your password - CutCosts",
+        html_content=html_content,
+        text_content=text_content,
+    )

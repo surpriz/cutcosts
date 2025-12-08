@@ -341,3 +341,101 @@ async def get_unverified_users_older_than(
         )
     )
     return list(result.scalars().all())
+
+
+# Password reset functions
+async def set_password_reset_token(db: AsyncSession, db_user: User) -> str:
+    """
+    Set password reset token for user.
+
+    Args:
+        db: Database session
+        db_user: User object
+
+    Returns:
+        Generated password reset token
+    """
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.utcnow() + timedelta(
+        hours=settings.PASSWORD_RESET_TOKEN_EXPIRE_HOURS
+    )
+
+    db_user.password_reset_token = token
+    db_user.password_reset_token_expires_at = expires_at
+
+    db.add(db_user)
+    await db.commit()
+    await db.refresh(db_user)
+
+    return token
+
+
+async def get_user_by_password_reset_token(
+    db: AsyncSession,
+    token: str,
+) -> User | None:
+    """
+    Get user by password reset token.
+
+    Args:
+        db: Database session
+        token: Password reset token
+
+    Returns:
+        User object or None if not found or expired
+    """
+    result = await db.execute(
+        select(User).where(
+            User.password_reset_token == token,
+            User.password_reset_token_expires_at > datetime.utcnow(),
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def clear_password_reset_token(db: AsyncSession, db_user: User) -> User:
+    """
+    Clear password reset token after use.
+
+    Args:
+        db: Database session
+        db_user: User object
+
+    Returns:
+        Updated user object
+    """
+    db_user.password_reset_token = None
+    db_user.password_reset_token_expires_at = None
+
+    db.add(db_user)
+    await db.commit()
+    await db.refresh(db_user)
+
+    return db_user
+
+
+async def reset_user_password(
+    db: AsyncSession,
+    db_user: User,
+    new_password: str,
+) -> User:
+    """
+    Reset user password and clear reset token.
+
+    Args:
+        db: Database session
+        db_user: User object
+        new_password: New plain text password
+
+    Returns:
+        Updated user object
+    """
+    db_user.hashed_password = get_password_hash(new_password)
+    db_user.password_reset_token = None
+    db_user.password_reset_token_expires_at = None
+
+    db.add(db_user)
+    await db.commit()
+    await db.refresh(db_user)
+
+    return db_user

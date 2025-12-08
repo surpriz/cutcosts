@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { User, Bell, Shield, Trash2, Save, Key, Sliders, RotateCcw, HardDrive, Globe, Camera, Server, Activity, Zap, Database, ArrowLeft, Network, AlertTriangle, TrendingDown, Archive, TestTube, Copy, Clock, Cpu, Users, FileText, Search, ChevronDown, Box, XCircle, Tag, DollarSign, AlertCircle, Layers, Calendar, TrendingUp, PackageOpen, Workflow } from "lucide-react";
+import { User, Bell, Shield, Trash2, Save, Key, Sliders, RotateCcw, HardDrive, Globe, Camera, Server, Activity, Zap, Database, ArrowLeft, Network, AlertTriangle, TrendingDown, Archive, TestTube, Copy, Clock, Cpu, Users, FileText, Search, ChevronDown, Box, XCircle, Tag, DollarSign, AlertCircle, Layers, Calendar, TrendingUp, PackageOpen, Workflow, Eye, EyeOff, Lock, CheckCircle } from "lucide-react";
+import { authAPI } from "@/lib/api";
 import Link from "next/link";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useDialog } from "@/hooks/useDialog";
@@ -1384,6 +1385,19 @@ export default function SettingsPage() {
     return "basic";
   });
 
+  // Password change form state
+  const [passwordForm, setPasswordForm] = useState({
+    currentPassword: "",
+    newPassword: "",
+    confirmPassword: "",
+  });
+  const [passwordLoading, setPasswordLoading] = useState(false);
+  const [passwordSuccess, setPasswordSuccess] = useState(false);
+  const [passwordError, setPasswordError] = useState("");
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
   // Use advanced notification system
   const { currentNotification, history, showSuccess, showError, dismiss, clearHistory } = useNotifications();
   const { showConfirm, showDestructiveConfirm } = useDialog();
@@ -1428,6 +1442,37 @@ export default function SettingsPage() {
   useEffect(() => {
     setSelectedCategory("all");
   }, [selectedProvider]);
+
+  // Password change handler
+  const handlePasswordChange = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordError("");
+    setPasswordSuccess(false);
+
+    // Validation
+    if (passwordForm.newPassword.length < 8) {
+      setPasswordError("New password must be at least 8 characters long");
+      return;
+    }
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      setPasswordError("New passwords do not match");
+      return;
+    }
+
+    setPasswordLoading(true);
+
+    try {
+      await authAPI.changePassword(passwordForm.currentPassword, passwordForm.newPassword);
+      setPasswordSuccess(true);
+      setPasswordForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
+      showSuccess("Password changed successfully!");
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : "Failed to change password";
+      setPasswordError(errorMessage);
+    } finally {
+      setPasswordLoading(false);
+    }
+  };
 
   const fetchDetectionRules = async () => {
     setIsLoading(true);
@@ -1922,19 +1967,119 @@ export default function SettingsPage() {
           <div className="space-y-6">
             <div className="rounded-2xl bg-white p-8 shadow-lg">
               <h2 className="mb-6 text-2xl font-bold text-gray-900">Change Password</h2>
-              <div className="space-y-6">
+
+              {passwordSuccess && (
+                <div className="mb-6 flex items-center gap-3 rounded-xl bg-green-50 border border-green-200 p-4">
+                  <CheckCircle className="h-5 w-5 text-green-600" />
+                  <span className="text-sm text-green-800 font-medium">Password changed successfully!</span>
+                </div>
+              )}
+
+              {passwordError && (
+                <div className="mb-6 rounded-xl bg-red-50 border border-red-200 p-4 text-sm text-red-700">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="h-5 w-5 text-red-600 flex-shrink-0 mt-0.5" />
+                    <span>{passwordError}</span>
+                  </div>
+                </div>
+              )}
+
+              <form onSubmit={handlePasswordChange} className="space-y-5">
                 <div>
                   <label className="mb-2 block text-sm font-semibold text-gray-700">Current Password</label>
-                  <input
-                    type="password"
-                    className="w-full rounded-xl border-2 border-gray-300 px-4 py-3 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                  />
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                    <input
+                      type={showCurrentPassword ? "text" : "password"}
+                      required
+                      value={passwordForm.currentPassword}
+                      onChange={(e) => setPasswordForm({ ...passwordForm, currentPassword: e.target.value })}
+                      className="w-full rounded-xl border-2 border-gray-300 pl-11 pr-11 py-3 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                      placeholder="Enter your current password"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    >
+                      {showCurrentPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                    </button>
+                  </div>
                 </div>
-                <button className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-purple-600 px-6 py-3 font-semibold text-white shadow-lg transition-all hover:scale-[1.02] hover:shadow-xl">
-                  <Key className="h-5 w-5" />
-                  Update Password
+
+                <div>
+                  <label className="mb-2 block text-sm font-semibold text-gray-700">New Password</label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                    <input
+                      type={showNewPassword ? "text" : "password"}
+                      required
+                      minLength={8}
+                      value={passwordForm.newPassword}
+                      onChange={(e) => setPasswordForm({ ...passwordForm, newPassword: e.target.value })}
+                      className="w-full rounded-xl border-2 border-gray-300 pl-11 pr-11 py-3 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                      placeholder="Minimum 8 characters"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowNewPassword(!showNewPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    >
+                      {showNewPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-semibold text-gray-700">Confirm New Password</label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                    <input
+                      type={showConfirmPassword ? "text" : "password"}
+                      required
+                      minLength={8}
+                      value={passwordForm.confirmPassword}
+                      onChange={(e) => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })}
+                      className="w-full rounded-xl border-2 border-gray-300 pl-11 pr-11 py-3 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                      placeholder="Re-enter your new password"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    >
+                      {showConfirmPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                    </button>
+                  </div>
+                  {passwordForm.confirmPassword && passwordForm.newPassword !== passwordForm.confirmPassword && (
+                    <p className="mt-1 text-sm text-red-600">Passwords do not match</p>
+                  )}
+                </div>
+
+                <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
+                  <p className="text-xs text-blue-800">
+                    Password must be at least 8 characters long.
+                  </p>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={passwordLoading}
+                  className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-purple-600 px-6 py-3 font-semibold text-white shadow-lg transition-all hover:scale-[1.02] hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {passwordLoading ? (
+                    <>
+                      <div className="h-5 w-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                      Updating...
+                    </>
+                  ) : (
+                    <>
+                      <Key className="h-5 w-5" />
+                      Update Password
+                    </>
+                  )}
                 </button>
-              </div>
+              </form>
             </div>
           </div>
         )}

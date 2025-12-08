@@ -69,3 +69,24 @@ class UserInDB(UserInDBBase):
     """User schema with hashed password (internal use only)."""
 
     hashed_password: str
+
+
+# Password reset schemas
+class ForgotPasswordRequest(BaseModel):
+    """Schema for forgot password request."""
+
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    """Schema for reset password with token."""
+
+    token: str
+    new_password: str = Field(..., min_length=8, max_length=100)
+
+
+class PasswordChangeRequest(BaseModel):
+    """Schema for authenticated password change."""
+
+    current_password: str
+    new_password: str = Field(..., min_length=8, max_length=100)
