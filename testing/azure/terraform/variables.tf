@@ -45,7 +45,7 @@ variable "enable_batch_2" {
 }
 
 variable "enable_batch_3" {
-  description = "Enable Batch 3 resources (Premium - TBD)"
+  description = "Enable Batch 3 resources (Advanced - ~€105/month: Container Apps, Virtual Desktop, Azure ML, App Service)"
   type        = bool
   default     = false
 }

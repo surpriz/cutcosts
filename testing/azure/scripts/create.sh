@@ -36,6 +36,11 @@ export TF_VAR_environment="${TF_VAR_environment:-test}"
 export TF_VAR_project_name="${TF_VAR_project_name:-cutcosts-testing}"
 export TF_VAR_owner_email="${TF_VAR_owner_email}"
 
+# Export batch control variables from .env
+export TF_VAR_enable_batch_1="${TF_VAR_enable_batch_1:-true}"
+export TF_VAR_enable_batch_2="${TF_VAR_enable_batch_2:-false}"
+export TF_VAR_enable_batch_3="${TF_VAR_enable_batch_3:-false}"
+
 # Unset Service Principal credentials to force az login usage
 unset ARM_CLIENT_ID
 unset ARM_CLIENT_SECRET
@@ -89,7 +94,7 @@ TOTAL_COST=0
 echo "Batches to create:"
 [ "${TF_VAR_enable_batch_1}" = "true" ] && echo "  ✓ Batch 1 (Core) - ~€68/month" && TOTAL_COST=$((TOTAL_COST + 68))
 [ "${TF_VAR_enable_batch_2}" = "true" ] && echo "  ✓ Batch 2 (Advanced) - ~€71/month" && TOTAL_COST=$((TOTAL_COST + 71))
-[ "${TF_VAR_enable_batch_3}" = "true" ] && echo "  ✓ Batch 3 (Premium) - TBD" && TOTAL_COST=$((TOTAL_COST + 0))
+[ "${TF_VAR_enable_batch_3}" = "true" ] && echo "  ✓ Batch 3 (Advanced) - ~€105/month (Container Apps, Virtual Desktop, Azure ML, App Service)" && TOTAL_COST=$((TOTAL_COST + 105))
 
 if [ $TOTAL_COST -eq 0 ]; then
     echo -e "${RED}✗ No batches enabled${NC}"

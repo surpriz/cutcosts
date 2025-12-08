@@ -62,7 +62,24 @@ output "batch_2_resources" {
 output "batch_3_resources" {
   description = "Batch 3 resource IDs and names"
   value = var.enable_batch_3 ? {
-    # Will be populated when batch3.tf is created
+    # Container Apps
+    log_analytics_workspace_id = try(azurerm_log_analytics_workspace.batch3[0].id, null)
+    container_app_env_id       = try(azurerm_container_app_environment.test[0].id, null)
+    container_app_name         = try(azurerm_container_app.idle[0].name, null)
+    # Virtual Desktop
+    host_pool_id               = try(azurerm_virtual_desktop_host_pool.test[0].id, null)
+    host_pool_name             = try(azurerm_virtual_desktop_host_pool.test[0].name, null)
+    app_group_id               = try(azurerm_virtual_desktop_application_group.test[0].id, null)
+    workspace_id               = try(azurerm_virtual_desktop_workspace.test[0].id, null)
+    session_host_vm_name       = try(azurerm_windows_virtual_machine.session_host[0].name, null)
+    # Azure ML
+    ml_workspace_id            = try(azurerm_machine_learning_workspace.test[0].id, null)
+    ml_workspace_name          = try(azurerm_machine_learning_workspace.test[0].name, null)
+    ml_compute_instance_name   = try(azurerm_machine_learning_compute_instance.idle[0].name, null)
+    # App Service
+    app_service_plan_id        = try(azurerm_service_plan.batch3[0].id, null)
+    web_app_name               = try(azurerm_linux_web_app.idle[0].name, null)
+    web_app_url                = try(azurerm_linux_web_app.idle[0].default_hostname, null)
   } : null
 }
 
@@ -72,8 +89,8 @@ output "estimated_monthly_cost" {
   value = {
     batch_1 = var.enable_batch_1 ? 68 : 0
     batch_2 = var.enable_batch_2 ? 71 : 0
-    batch_3 = var.enable_batch_3 ? 0 : 0
-    total   = (var.enable_batch_1 ? 68 : 0) + (var.enable_batch_2 ? 71 : 0) + (var.enable_batch_3 ? 0 : 0)
+    batch_3 = var.enable_batch_3 ? 105 : 0
+    total   = (var.enable_batch_1 ? 68 : 0) + (var.enable_batch_2 ? 71 : 0) + (var.enable_batch_3 ? 105 : 0)
   }
 }
 
@@ -102,5 +119,17 @@ output "batch_2_cost_breakdown" {
     function_app       = 0  # €0 pay-per-execution (Consumption plan)
     cosmosdb           = 0  # €0 pay-per-request (Serverless)
     total              = 71
+  } : null
+}
+
+# Detailed Cost Breakdown (Batch 3)
+output "batch_3_cost_breakdown" {
+  description = "Detailed monthly cost breakdown for Batch 3 in EUR"
+  value = var.enable_batch_3 ? {
+    container_app_env    = 15  # Container App Environment + Container App
+    virtual_desktop      = 50  # Host Pool + Session Host VM (deallocated €0, but reserves capacity)
+    azure_ml_compute     = 30  # ML Workspace + Compute Instance (Standard_DS1_v2)
+    app_service          = 10  # Service Plan B1 + Web App
+    total                = 105
   } : null
 }

@@ -33,6 +33,12 @@ export TF_VAR_environment="${TF_VAR_environment:-test}"
 export TF_VAR_project_name="${TF_VAR_project_name:-cutcosts-testing}"
 export TF_VAR_owner_email="${TF_VAR_owner_email}"
 
+# Force all batches to true for destroy - ensures ALL resources in state are destroyed
+# regardless of .env settings
+export TF_VAR_enable_batch_1=true
+export TF_VAR_enable_batch_2=true
+export TF_VAR_enable_batch_3=true
+
 # Unset Service Principal credentials to force az login usage
 unset ARM_CLIENT_ID
 unset ARM_CLIENT_SECRET
@@ -85,30 +91,32 @@ fi
 echo -e "${GREEN}✓ Azure authenticated${NC}"
 echo ""
 
-# Pre-destruction: Start deallocated VMs
+# Pre-destruction: Start ALL deallocated VMs in the resource group
 echo ""
 echo "Checking for deallocated VMs..."
 
-# Get VM name from Terraform output
-VM_NAME=$(terraform output -json batch_1_resources 2>/dev/null | grep -o '"vm_name":"[^"]*' | cut -d'"' -f4 || echo "")
 RG_NAME=$(terraform output -raw resource_group_name 2>/dev/null || echo "cutcosts-testing-rg")
 
-if [ -n "$VM_NAME" ] && [ "$VM_NAME" != "null" ]; then
-    echo "Found VM: $VM_NAME"
+# Get all deallocated VMs in the resource group (handles batch_1, batch_3, etc.)
+# Note: -d (--show-details) is required to get powerState
+DEALLOCATED_VMS=$(az vm list -g "$RG_NAME" -d --query "[?powerState=='VM deallocated'].name" -o tsv 2>/dev/null || echo "")
 
-    # Check VM power state
-    VM_STATE=$(az vm get-instance-view --resource-group "$RG_NAME" --name "$VM_NAME" --query "instanceView.statuses[?starts_with(code, 'PowerState/')].displayStatus" -o tsv 2>/dev/null || echo "")
+if [ -n "$DEALLOCATED_VMS" ]; then
+    echo "Found deallocated VMs: $DEALLOCATED_VMS"
 
-    if [[ "$VM_STATE" == *"deallocated"* ]] || [[ "$VM_STATE" == *"stopped"* ]]; then
-        echo -e "${YELLOW}VM is deallocated/stopped. Starting VM to allow proper cleanup...${NC}"
+    for VM_NAME in $DEALLOCATED_VMS; do
+        echo -e "${YELLOW}Starting VM '$VM_NAME' to allow proper cleanup...${NC}"
+        az vm start --resource-group "$RG_NAME" --name "$VM_NAME" --no-wait
+    done
 
-        # Start VM and wait for completion (synchronous)
-        az vm start --resource-group "$RG_NAME" --name "$VM_NAME"
-
-        echo -e "${GREEN}✓ VM started successfully${NC}"
-    else
-        echo "VM is already running or in a valid state for deletion"
-    fi
+    # Wait for all VMs to start
+    echo "Waiting for VMs to start..."
+    for VM_NAME in $DEALLOCATED_VMS; do
+        az vm wait --resource-group "$RG_NAME" --name "$VM_NAME" --custom "instanceView.statuses[?code=='PowerState/running']"
+        echo -e "${GREEN}✓ VM '$VM_NAME' started successfully${NC}"
+    done
+else
+    echo "No deallocated VMs found"
 fi
 
 # Show what will be destroyed
@@ -120,7 +128,7 @@ terraform plan -destroy
 TOTAL_COST=0
 [ "${TF_VAR_enable_batch_1}" = "true" ] && TOTAL_COST=$((TOTAL_COST + 68))
 [ "${TF_VAR_enable_batch_2}" = "true" ] && TOTAL_COST=$((TOTAL_COST + 71))
-[ "${TF_VAR_enable_batch_3}" = "true" ] && TOTAL_COST=$((TOTAL_COST + 0))
+[ "${TF_VAR_enable_batch_3}" = "true" ] && TOTAL_COST=$((TOTAL_COST + 105))
 
 echo ""
 echo -e "${YELLOW}This will destroy ALL test resources (saving ~€${TOTAL_COST}/month)${NC}"
@@ -134,6 +142,21 @@ if [ -z "$AUTO_APPROVE" ]; then
         echo "Aborted."
         exit 0
     fi
+fi
+
+# Pre-destruction: Delete auto-created Azure resources that block RG deletion
+echo ""
+echo "Checking for auto-created resources..."
+
+# Azure auto-creates "Application Insights Smart Detection" action groups
+# These block Resource Group deletion by Terraform
+SMART_DETECTION_AG=$(az monitor action-group list -g "$RG_NAME" --query "[?name=='Application Insights Smart Detection'].name" -o tsv 2>/dev/null || echo "")
+if [ -n "$SMART_DETECTION_AG" ]; then
+    echo -e "${YELLOW}Deleting auto-created action group 'Application Insights Smart Detection'...${NC}"
+    az monitor action-group delete --name "Application Insights Smart Detection" --resource-group "$RG_NAME" 2>/dev/null
+    echo -e "${GREEN}✓ Action group deleted${NC}"
+else
+    echo "No auto-created action groups found"
 fi
 
 # Destroy resources

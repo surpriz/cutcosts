@@ -16958,17 +16958,129 @@ class AzureProvider(CloudProviderBase):
         self, region: str, detection_rules: dict | None = None
     ) -> list[OrphanResourceData]:
         """
-        Scan for Container Apps with 0 replicas in production environment.
-        SCENARIO 2: container_app_zero_replicas - Production apps with scale-to-zero config.
+        Scan for Container Apps with 0 replicas configuration.
+        SCENARIO 2: container_app_zero_replicas - Apps configured to scale to zero.
 
         Detection Logic:
-        - minReplicas = 0 AND maxReplicas = 0
-        - Environment tagged as 'production' (exclude dev/test)
-        - Configuration >30 days old
+        - minReplicas = 0 AND maxReplicas <= 1
+        - Resource age > min_age_days (default 7)
 
-        Cost Impact: $146/month (D4 Dedicated) even with 0 replicas
+        Cost Impact: $15-146/month depending on plan (Consumption vs Dedicated)
         """
-        return []
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.appcontainers import ContainerAppsAPIClient
+
+        orphans = []
+        min_age_days = detection_rules.get("min_age_days", 7) if detection_rules else 7
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+
+            client = ContainerAppsAPIClient(credential, self.subscription_id)
+
+            # List all container apps in the subscription
+            container_apps = client.container_apps.list_by_subscription()
+
+            for app in container_apps:
+                # Filter by region (normalize location names)
+                app_location = app.location.lower().replace(" ", "") if app.location else ""
+                target_region = region.lower().replace(" ", "")
+                if app_location != target_region:
+                    continue
+
+                # Filter by resource group scope
+                if not self._is_resource_in_scope(app.id):
+                    continue
+
+                # Check for 0 replicas configuration
+                template = app.template
+                if template and template.scale:
+                    min_replicas = template.scale.min_replicas or 0
+                    max_replicas = template.scale.max_replicas or 0
+
+                    # Detect apps with scale-to-zero config
+                    if min_replicas == 0 and max_replicas <= 1:
+                        # Calculate age
+                        age_days = 0
+                        if hasattr(app, 'system_data') and app.system_data and app.system_data.created_at:
+                            created_at = app.system_data.created_at
+                            # Handle both offset-naive and offset-aware datetimes
+                            if created_at.tzinfo is None:
+                                created_at = created_at.replace(tzinfo=timezone.utc)
+                            age_days = (datetime.now(timezone.utc) - created_at).days
+
+                        if age_days < min_age_days:
+                            continue
+
+                        # Calculate cost (Consumption plan base)
+                        monthly_cost = self._calculate_container_app_cost(app)
+
+                        # Get environment name
+                        env_id = app.managed_environment_id or ''
+                        env_name = env_id.split('/')[-1] if env_id else 'Unknown'
+
+                        orphan_reason = f"Container App '{app.name}' configured with scale-to-zero (min={min_replicas}, max={max_replicas}) for {age_days} days"
+
+                        metadata = {
+                            'app_id': app.id,
+                            'app_name': app.name,
+                            'environment_name': env_name,
+                            'min_replicas': min_replicas,
+                            'max_replicas': max_replicas,
+                            'location': app.location,
+                            'created_at': app.system_data.created_at.isoformat() if hasattr(app, 'system_data') and app.system_data and app.system_data.created_at else None,
+                            'age_days': age_days,
+                            'orphan_reason': orphan_reason,
+                            'confidence_level': self._calculate_confidence_level(age_days, detection_rules),
+                            'tags': dict(app.tags) if app.tags else {},
+                        }
+
+                        orphan = OrphanResourceData(
+                            resource_type='container_app_zero_replicas',
+                            resource_id=app.id,
+                            resource_name=app.name,
+                            region=app.location,
+                            estimated_monthly_cost=monthly_cost,
+                            resource_metadata=metadata
+                        )
+                        orphans.append(orphan)
+
+        except Exception as e:
+            print(f"Error scanning container apps (zero replicas) in {region}: {str(e)}")
+
+        return orphans
+
+    def _calculate_container_app_cost(self, app) -> float:
+        """
+        Calculate monthly cost for Container App.
+
+        Consumption plan: ~$0.000012/vCPU-second + $0.000016/GiB-second
+        Dedicated (D4): ~$146/month
+
+        Returns conservative estimate based on plan type.
+        """
+        # Check if app is on Dedicated plan
+        env_id = app.managed_environment_id or ''
+
+        # Default to Consumption plan estimate
+        # Assuming minimal usage for idle app: ~$15/month
+        if app.template and app.template.containers:
+            container = app.template.containers[0]
+            cpu = float(container.resources.cpu) if container.resources and container.resources.cpu else 0.25
+            memory_gb = float(container.resources.memory.replace('Gi', '')) if container.resources and container.resources.memory else 0.5
+
+            # Consumption pricing (approximate monthly cost for always-on)
+            # vCPU: $0.000012/second = $31.10/month per vCPU
+            # Memory: $0.000016/second = $41.47/month per GiB
+            monthly_cost = (cpu * 31.10) + (memory_gb * 41.47)
+            return round(monthly_cost, 2)
+
+        return 15.00  # Default estimate
 
     async def scan_container_app_unnecessary_premium_tier(
         self, region: str, detection_rules: dict | None = None
@@ -17213,17 +17325,104 @@ class AzureProvider(CloudProviderBase):
         self, region: str, detection_rules: dict | None = None
     ) -> list[OrphanResourceData]:
         """
-        Scan for empty host pools (0 session hosts) since >30 days.
-        SCENARIO 1: avd_host_pool_empty - Minimal cost but wasteful infrastructure.
+        Scan for empty host pools (0 session hosts).
+        SCENARIO 1: avd_host_pool_empty - Wasteful infrastructure with no session hosts.
 
         Detection Logic:
-        - Host pool with 0 session hosts
-        - Age > min_empty_days (default 30)
-        - Still exists but serves no purpose
+        - Host pool with 0 session hosts registered
+        - Age > min_age_days (default 7)
 
-        Cost Impact: Minimal infrastructure cost ($0-146/month depending on environment)
+        Cost Impact: Infrastructure cost varies ($0-50/month depending on environment)
         """
-        return []
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.desktopvirtualization import DesktopVirtualizationMgmtClient
+
+        orphans = []
+        min_age_days = detection_rules.get("min_age_days", 7) if detection_rules else 7
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+
+            client = DesktopVirtualizationMgmtClient(credential, self.subscription_id)
+
+            # List all host pools in the subscription
+            host_pools = client.host_pools.list()
+
+            for hp in host_pools:
+                # Filter by region (AVD uses 'location') - normalize location names
+                hp_location = hp.location.lower().replace(" ", "") if hp.location else ""
+                target_region = region.lower().replace(" ", "")
+                if hp_location != target_region:
+                    continue
+
+                # Filter by resource group scope
+                if not self._is_resource_in_scope(hp.id):
+                    continue
+
+                # Extract resource group name from host pool ID
+                # Format: /subscriptions/{sub}/resourceGroups/{rg}/providers/...
+                rg_name = hp.id.split('/')[4] if len(hp.id.split('/')) > 4 else None
+                if not rg_name:
+                    continue
+
+                # Count session hosts in this host pool
+                try:
+                    session_hosts = list(client.session_hosts.list(rg_name, hp.name))
+                    session_host_count = len(session_hosts)
+                except Exception:
+                    session_host_count = 0
+
+                # Only flag host pools with 0 session hosts
+                if session_host_count == 0:
+                    # Calculate age
+                    age_days = 0
+                    if hasattr(hp, 'system_data') and hp.system_data and hp.system_data.created_at:
+                        age_days = (datetime.now(timezone.utc) - hp.system_data.created_at).days
+
+                    if age_days < min_age_days:
+                        continue
+
+                    # Host pools with no session hosts have minimal cost
+                    # but represent wasteful infrastructure
+                    monthly_cost = 0.0
+
+                    orphan_reason = f"Virtual Desktop Host Pool '{hp.name}' has 0 session hosts registered for {age_days} days"
+
+                    metadata = {
+                        'host_pool_id': hp.id,
+                        'host_pool_name': hp.name,
+                        'host_pool_type': hp.host_pool_type,
+                        'load_balancer_type': hp.load_balancer_type if hasattr(hp, 'load_balancer_type') else None,
+                        'max_session_limit': hp.max_session_limit if hasattr(hp, 'max_session_limit') else None,
+                        'session_host_count': session_host_count,
+                        'resource_group': rg_name,
+                        'location': hp.location,
+                        'created_at': hp.system_data.created_at.isoformat() if hasattr(hp, 'system_data') and hp.system_data and hp.system_data.created_at else None,
+                        'age_days': age_days,
+                        'orphan_reason': orphan_reason,
+                        'confidence_level': self._calculate_confidence_level(age_days, detection_rules),
+                        'tags': dict(hp.tags) if hp.tags else {},
+                    }
+
+                    orphan = OrphanResourceData(
+                        resource_type='avd_host_pool_empty',
+                        resource_id=hp.id,
+                        resource_name=hp.name,
+                        region=hp.location,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata=metadata
+                    )
+                    orphans.append(orphan)
+
+        except Exception as e:
+            print(f"Error scanning AVD host pools in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_avd_session_host_stopped(
         self, region: str, detection_rules: dict | None = None
@@ -17795,18 +17994,233 @@ class AzureProvider(CloudProviderBase):
         self, region: str, detection_rules: dict | None = None
     ) -> list[OrphanResourceData]:
         """
-        Scan for compute instances running 24/7 without auto-shutdown.
+        Scan for ML compute instances running without auto-shutdown configured.
         SCENARIO 1: ml_compute_instance_no_auto_shutdown - Waste 67% if used 8h/day.
 
         Detection Logic:
-        - Instance in Running state
-        - No idle_time_before_shutdown configured
-        - No schedule shutdown configured
+        - Instance exists (any state)
+        - No idle_time_before_shutdown or schedule configured
         - Age > min_age_days (default 7)
 
-        Cost Impact: $112/month waste for Standard_DS3_v2 (67% if used 8h/day)
+        Cost Impact: $54-432/month depending on VM size
         """
-        return []
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.resource import ResourceManagementClient
+        import requests
+
+        orphans = []
+        min_age_days = detection_rules.get("min_age_days", 7) if detection_rules else 7
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+
+            resource_client = ResourceManagementClient(credential, self.subscription_id)
+
+            # Get access token for REST API calls
+            token = credential.get_token('https://management.azure.com/.default')
+
+            # List all ML workspaces using Resource Manager
+            workspaces = resource_client.resources.list(
+                filter="resourceType eq 'Microsoft.MachineLearningServices/workspaces'"
+            )
+
+            for ws in workspaces:
+                # Filter by region (normalize location names)
+                ws_location = ws.location.lower().replace(" ", "") if ws.location else ""
+                target_region = region.lower().replace(" ", "")
+                if ws_location != target_region:
+                    continue
+
+                # Filter by resource group scope
+                if not self._is_resource_in_scope(ws.id):
+                    continue
+
+                # Extract resource group name and workspace name from ID
+                # Format: /subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.MachineLearningServices/workspaces/{name}
+                parts = ws.id.split('/')
+                rg_name = parts[4] if len(parts) > 4 else None
+                ws_name = parts[-1] if parts else None
+                if not rg_name or not ws_name:
+                    continue
+
+                # List compute resources in this workspace using REST API
+                # (ResourceManagementClient doesn't list workspace/computes as separate resources)
+                try:
+                    url = f'https://management.azure.com/subscriptions/{self.subscription_id}/resourceGroups/{rg_name}/providers/Microsoft.MachineLearningServices/workspaces/{ws_name}/computes?api-version=2023-10-01'
+                    headers = {'Authorization': f'Bearer {token.token}'}
+                    response = requests.get(url, headers=headers, timeout=30)
+
+                    if response.status_code != 200:
+                        print(f"Error fetching computes for workspace {ws_name}: {response.status_code}")
+                        continue
+
+                    data = response.json()
+                    computes = data.get('value', [])
+
+                    for compute in computes:
+                        compute_name = compute.get('name')
+                        compute_id = compute.get('id')
+                        props = compute.get('properties', {})
+                        compute_type = props.get('computeType')
+
+                        # Only process ComputeInstance (not clusters)
+                        if compute_type != 'ComputeInstance':
+                            continue
+
+                        # Get compute properties
+                        compute_props = props.get('properties', {}) or {}
+                        vm_size = compute_props.get('vmSize', 'Standard_DS1_v2')
+                        state = compute_props.get('state', 'Unknown')
+
+                        # Check for auto-shutdown configuration
+                        idle_shutdown = compute_props.get('idleTimeBeforeShutdown')
+                        schedules = compute_props.get('schedules', {})
+                        has_shutdown_schedule = bool(schedules.get('computeStartStop', []))
+
+                        # If auto-shutdown is configured, skip this instance
+                        if idle_shutdown or has_shutdown_schedule:
+                            continue
+
+                        monthly_cost = self._calculate_ml_compute_cost(vm_size)
+
+                        # Estimate age (conservative - assume 7 days if we can't determine)
+                        age_days = 7
+                        created_at = compute_props.get('createdOn')
+                        if created_at:
+                            try:
+                                from dateutil import parser
+                                created_date = parser.parse(created_at)
+                                if created_date.tzinfo is None:
+                                    created_date = created_date.replace(tzinfo=timezone.utc)
+                                age_days = (datetime.now(timezone.utc) - created_date).days
+                            except Exception:
+                                pass
+
+                        if age_days < min_age_days:
+                            continue
+
+                        orphan_reason = f"ML Compute Instance '{compute_name}' in workspace '{ws_name}' running without auto-shutdown (potential 24/7 costs)"
+
+                        metadata = {
+                            'compute_id': compute_id,
+                            'compute_name': compute_name,
+                            'workspace_name': ws_name,
+                            'workspace_id': ws.id,
+                            'resource_group': rg_name,
+                            'vm_size': vm_size,
+                            'state': state,
+                            'has_auto_shutdown': False,
+                            'has_shutdown_schedule': has_shutdown_schedule,
+                            'idle_time_before_shutdown': idle_shutdown,
+                            'location': ws.location,
+                            'age_days': age_days,
+                            'orphan_reason': orphan_reason,
+                            'recommendation': 'Configure auto-shutdown or idle timeout to save up to 67% on compute costs',
+                            'confidence_level': 'high' if age_days >= 7 else 'medium',
+                        }
+
+                        orphan = OrphanResourceData(
+                            resource_type='ml_compute_instance_no_auto_shutdown',
+                            resource_id=compute_id,
+                            resource_name=compute_name,
+                            region=ws.location,
+                            estimated_monthly_cost=monthly_cost,
+                            resource_metadata=metadata
+                        )
+                        orphans.append(orphan)
+
+                except Exception as ws_error:
+                    print(f"Error listing compute in workspace {ws_name}: {str(ws_error)}")
+                    continue
+
+        except Exception as e:
+            print(f"Error scanning ML compute instances in {region}: {str(e)}")
+
+        return orphans
+
+    def _calculate_ml_compute_cost(self, vm_size: str) -> float:
+        """
+        Calculate monthly cost for ML Compute Instance based on VM size.
+
+        Common Azure ML VM sizes and approximate costs (US East):
+        - Standard_DS1_v2: ~$54/month
+        - Standard_DS2_v2: ~$108/month
+        - Standard_DS3_v2: ~$168/month
+        - Standard_DS4_v2: ~$336/month
+        - NC6 (GPU): ~$657/month
+        """
+        costs = {
+            'Standard_DS1_v2': 54.0,
+            'Standard_DS2_v2': 108.0,
+            'Standard_DS3_v2': 168.0,
+            'Standard_DS4_v2': 336.0,
+            'Standard_D2_v2': 108.0,
+            'Standard_D4_v2': 216.0,
+            'Standard_NC6': 657.0,
+            'Standard_NC12': 1314.0,
+            'Standard_NC24': 2628.0,
+        }
+        # Default to DS1_v2 cost if size not found
+        return costs.get(vm_size, 54.0)
+
+    def _calculate_app_service_cost(self, app) -> float:
+        """
+        Calculate monthly cost for App Service based on service plan SKU.
+
+        Common Azure App Service plans and approximate costs:
+        - F1 (Free): $0/month
+        - D1 (Shared): ~$9.49/month
+        - B1 (Basic): ~$13.14/month
+        - B2: ~$26.28/month
+        - B3: ~$52.56/month
+        - S1 (Standard): ~$73.00/month
+        - S2: ~$146.00/month
+        - S3: ~$292.00/month
+        - P1V2 (Premium V2): ~$84.68/month
+        - P2V2: ~$169.36/month
+        - P3V2: ~$338.72/month
+        - P1V3 (Premium V3): ~$124.10/month
+        - P2V3: ~$248.20/month
+        - P3V3: ~$496.40/month
+        """
+        # Default cost estimate when we can't determine exact SKU
+        # Based on B1 tier which is common for low-traffic apps
+        default_cost = 13.14
+
+        # Try to extract SKU from server_farm_id or app properties
+        if hasattr(app, 'server_farm_id') and app.server_farm_id:
+            # Service plan ID format: /subscriptions/.../resourceGroups/.../providers/Microsoft.Web/serverfarms/<plan_name>
+            # We would need an additional API call to get SKU details
+            # For now, estimate based on common patterns
+            pass
+
+        # If app has sku property directly
+        if hasattr(app, 'sku') and app.sku:
+            sku_name = app.sku.name if hasattr(app.sku, 'name') else str(app.sku)
+            costs = {
+                'F1': 0.0,
+                'D1': 9.49,
+                'B1': 13.14,
+                'B2': 26.28,
+                'B3': 52.56,
+                'S1': 73.00,
+                'S2': 146.00,
+                'S3': 292.00,
+                'P1V2': 84.68,
+                'P2V2': 169.36,
+                'P3V2': 338.72,
+                'P1V3': 124.10,
+                'P2V3': 248.20,
+                'P3V3': 496.40,
+            }
+            return costs.get(sku_name.upper(), default_cost)
+
+        return default_cost
 
     async def scan_ml_compute_instance_gpu_for_cpu_workload(
         self, region: str, detection_rules: dict | None = None
@@ -18282,7 +18696,129 @@ class AzureProvider(CloudProviderBase):
 
         Cost Impact: $70/month S1 waste (move to Functions/Container Apps)
         """
-        return []
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.web import WebSiteManagementClient
+        from azure.mgmt.monitor import MonitorManagementClient
+
+        orphans = []
+        min_age_days = detection_rules.get("min_age_days", 7) if detection_rules else 7
+        max_requests_per_day = detection_rules.get("max_requests_per_day", 100) if detection_rules else 100
+        observation_days = detection_rules.get("observation_days", 7) if detection_rules else 7
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+
+            web_client = WebSiteManagementClient(credential, self.subscription_id)
+            monitor_client = MonitorManagementClient(credential, self.subscription_id)
+
+            # List all web apps in the subscription
+            web_apps = web_client.web_apps.list()
+
+            for app in web_apps:
+                # Filter by region (normalize region names)
+                app_location = app.location.lower().replace(" ", "") if app.location else ""
+                target_region = region.lower().replace(" ", "")
+                if app_location != target_region:
+                    continue
+
+                # Check if resource is in scope
+                if not self._is_resource_in_scope(app.id):
+                    continue
+
+                # Skip if app is not in "Running" state
+                if app.state and app.state.lower() != "running":
+                    continue
+
+                # Calculate age
+                age_days = 0
+                created_at = None
+                if hasattr(app, 'system_data') and app.system_data:
+                    if hasattr(app.system_data, 'created_at') and app.system_data.created_at:
+                        created_at = app.system_data.created_at
+                        if created_at.tzinfo is None:
+                            created_at = created_at.replace(tzinfo=timezone.utc)
+                        age_days = (datetime.now(timezone.utc) - created_at).days
+
+                if age_days < min_age_days:
+                    continue
+
+                # Get request metrics from Azure Monitor
+                end_time = datetime.now(timezone.utc)
+                start_time = end_time - timedelta(days=observation_days)
+                total_requests = 0
+
+                try:
+                    # Azure Monitor requires ISO 8601 format with Z suffix for UTC
+                    timespan = f"{start_time.strftime('%Y-%m-%dT%H:%M:%SZ')}/{end_time.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+                    metrics_data = monitor_client.metrics.list(
+                        resource_uri=app.id,
+                        timespan=timespan,
+                        interval="P1D",
+                        metricnames="Requests",
+                        aggregation="Total"
+                    )
+
+                    for metric in metrics_data.value:
+                        if metric.name.value == "Requests":
+                            for ts in metric.timeseries:
+                                for data_point in ts.data:
+                                    if data_point.total is not None:
+                                        total_requests += data_point.total
+                except Exception as metric_error:
+                    # If we can't get metrics, assume low traffic
+                    print(f"Could not get metrics for {app.name}: {str(metric_error)}")
+                    total_requests = 0
+
+                # Calculate average requests per day
+                avg_requests_per_day = total_requests / observation_days if observation_days > 0 else 0
+
+                # Check if traffic is below threshold
+                if avg_requests_per_day <= max_requests_per_day:
+                    # Get service plan SKU for cost calculation
+                    monthly_cost = self._calculate_app_service_cost(app)
+
+                    # Determine confidence level
+                    if avg_requests_per_day == 0:
+                        confidence = "critical" if age_days >= 30 else "high"
+                    elif avg_requests_per_day < 10:
+                        confidence = "high" if age_days >= 14 else "medium"
+                    else:
+                        confidence = "medium" if age_days >= 14 else "low"
+
+                    metadata = {
+                        'app_name': app.name,
+                        'kind': app.kind if app.kind else 'webapp',
+                        'state': app.state if app.state else 'Unknown',
+                        'service_plan_id': app.server_farm_id if app.server_farm_id else None,
+                        'total_requests_period': int(total_requests),
+                        'avg_requests_per_day': round(avg_requests_per_day, 2),
+                        'observation_days': observation_days,
+                        'age_days': age_days,
+                        'default_host_name': app.default_host_name if app.default_host_name else None,
+                        'orphan_reason': f'App Service with only {round(avg_requests_per_day, 1)} requests/day average over {observation_days} days',
+                        'recommendation': 'Consider migrating to Azure Functions (Consumption) or Container Apps for serverless/pay-per-use model',
+                        'confidence_level': confidence,
+                    }
+
+                    orphan = OrphanResourceData(
+                        resource_type='app_service_low_request_count',
+                        resource_id=app.id,
+                        resource_name=app.name,
+                        region=app.location,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata=metadata
+                    )
+                    orphans.append(orphan)
+
+        except Exception as e:
+            print(f"Error scanning app services (low request count) in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_app_service_no_traffic_business_hours(
         self, region: str, detection_rules: dict | None = None

@@ -11432,6 +11432,14 @@ class AzureInventoryScanner:
         self.resource_groups = provider.resource_groups or []
         self.logger = structlog.get_logger()
 
+        # Create credential once for reuse across scan methods
+        from azure.identity import ClientSecretCredential
+        self.credential = ClientSecretCredential(
+            tenant_id=self.tenant_id,
+            client_id=self.client_id,
+            client_secret=self.client_secret
+        )
+
     async def scan_virtual_machines(self, region: str) -> list[AllCloudResourceData]:
         """
         Scan ALL Azure Virtual Machines for cost intelligence.
@@ -14752,11 +14760,22 @@ class AzureInventoryScanner:
                 subscription_id=self.subscription_id
             )
 
-            # List all Container Apps
-            async for app in container_client.container_apps.list_by_subscription():
+            # List all Container Apps (SDK returns synchronous iterator - must wrap with list())
+            container_apps = list(container_client.container_apps.list_by_subscription())
+            self.logger.info(f"Container Apps API returned {len(container_apps)} apps for subscription {self.subscription_id}")
+
+            for app in container_apps:
                 try:
-                    # Filter by region if specified
-                    if region.lower() != "all" and app.location.lower() != region.lower():
+                    # Log each Container App found
+                    app_name = getattr(app, 'name', 'unknown')
+                    app_loc = getattr(app, 'location', 'unknown')
+                    self.logger.info(f"Processing Container App: {app_name} in location: {app_loc}")
+
+                    # Filter by region if specified (normalize region names - remove spaces)
+                    app_location = app.location.lower().replace(" ", "") if app.location else ""
+                    target_region = region.lower().replace(" ", "")
+                    if target_region != "all" and app_location != target_region:
+                        self.logger.info(f"Skipping Container App {app_name}: region mismatch ({app_location} vs {target_region})")
                         continue
 
                     # Get resource group from app ID
@@ -14783,13 +14802,13 @@ class AzureInventoryScanner:
                     configuration = getattr(app, 'configuration', None)
                     template = getattr(app, 'template', None)
 
-                    # Get scale settings
+                    # Get scale settings (handle None values from Azure API)
                     min_replicas = 0
                     max_replicas = 1
                     if template and hasattr(template, 'scale'):
                         scale = template.scale
-                        min_replicas = getattr(scale, 'min_replicas', 0)
-                        max_replicas = getattr(scale, 'max_replicas', 1)
+                        min_replicas = getattr(scale, 'min_replicas', 0) or 0
+                        max_replicas = getattr(scale, 'max_replicas', 1) or 1
 
                     # Get container resources
                     containers = []
@@ -14800,8 +14819,8 @@ class AzureInventoryScanner:
                         for container in containers:
                             resources_config = getattr(container, 'resources', None)
                             if resources_config:
-                                cpu = getattr(resources_config, 'cpu', 0.25)
-                                memory = getattr(resources_config, 'memory', '0.5Gi')
+                                cpu = getattr(resources_config, 'cpu', 0.25) or 0.25
+                                memory = getattr(resources_config, 'memory', '0.5Gi') or '0.5Gi'
                                 # Parse memory (e.g., "0.5Gi" -> 0.5)
                                 try:
                                     mem_value = float(memory.replace('Gi', '').replace('G', ''))
@@ -14834,7 +14853,7 @@ class AzureInventoryScanner:
                         resource_id=app.id,
                         resource_type="azure_container_app",
                         resource_name=app.name or "Unnamed Container App",
-                        region=app.location,
+                        region=app_location,
                         estimated_monthly_cost=round(estimated_cost, 2),
                         currency="USD",
                         resource_metadata={
@@ -14868,7 +14887,8 @@ class AzureInventoryScanner:
             return resources
 
         except Exception as e:
-            self.logger.error(f"Error scanning Container Apps: {str(e)}")
+            import traceback
+            self.logger.error(f"Error scanning Container Apps: {str(e)}\nStacktrace:\n{traceback.format_exc()}")
             return []
 
     def _calculate_container_app_optimization(self, app) -> tuple[bool, int, str, float, list[dict]]:
@@ -14890,15 +14910,15 @@ class AzureInventoryScanner:
         managed_environment_id = getattr(app, 'managed_environment_id', '')
         is_consumption = 'consumption' in managed_environment_id.lower() if managed_environment_id else True
 
-        # Get scale settings
+        # Get scale settings (handle None values from Azure API)
         min_replicas = 0
         max_replicas = 1
         if template and hasattr(template, 'scale'):
             scale = template.scale
-            min_replicas = getattr(scale, 'min_replicas', 0)
-            max_replicas = getattr(scale, 'max_replicas', 1)
+            min_replicas = getattr(scale, 'min_replicas', 0) or 0
+            max_replicas = getattr(scale, 'max_replicas', 1) or 1
 
-        # Get resources
+        # Get resources (handle None values from Azure API)
         total_vcpu = 0.25
         total_memory_gb = 0.5
         if template and hasattr(template, 'containers'):
@@ -14906,8 +14926,8 @@ class AzureInventoryScanner:
             for container in containers:
                 resources_config = getattr(container, 'resources', None)
                 if resources_config:
-                    cpu = getattr(resources_config, 'cpu', 0.25)
-                    memory = getattr(resources_config, 'memory', '0.5Gi')
+                    cpu = getattr(resources_config, 'cpu', 0.25) or 0.25
+                    memory = getattr(resources_config, 'memory', '0.5Gi') or '0.5Gi'
                     try:
                         mem_value = float(memory.replace('Gi', '').replace('G', ''))
                     except:
@@ -15030,8 +15050,8 @@ class AzureInventoryScanner:
                 subscription_id=self.subscription_id
             )
 
-            # List all host pools
-            async for host_pool in vd_client.host_pools.list():
+            # List all host pools (SDK returns synchronous iterator)
+            for host_pool in vd_client.host_pools.list():
                 try:
                     # Filter by region if specified
                     if region.lower() != "all" and host_pool.location.lower() != region.lower():
@@ -15519,58 +15539,97 @@ class AzureInventoryScanner:
         - Running but no notebooks active (HIGH - 70 score)
         - GPU instance for CPU workload (MEDIUM - 50 score)
         - No auto-shutdown configured (LOW - 30 score)
+
+        NOTE: Uses ResourceManagementClient + REST API because the
+        AzureMachineLearningWorkspaces SDK doesn't have a .compute attribute.
         """
         try:
-            from azure.mgmt.machinelearningservices import AzureMachineLearningWorkspaces
+            from azure.mgmt.resource import ResourceManagementClient
+            import requests
         except ImportError:
-            self.logger.error("azure-mgmt-machinelearningservices not installed")
+            self.logger.error("azure-mgmt-resource or requests not installed")
             return []
 
         resources = []
         self.logger.info(f"Scanning ML Compute Instances in region: {region}")
 
         try:
-            ml_client = AzureMachineLearningWorkspaces(
-                credential=self.credential,
-                subscription_id=self.subscription_id
+            # Use ResourceManagementClient to list workspaces
+            resource_client = ResourceManagementClient(self.credential, self.subscription_id)
+
+            # Get access token for REST API calls
+            token = self.credential.get_token('https://management.azure.com/.default')
+
+            # List all ML workspaces using Resource Manager (synchronous iterator)
+            workspaces = resource_client.resources.list(
+                filter="resourceType eq 'Microsoft.MachineLearningServices/workspaces'"
             )
 
-            # List all workspaces first
-            async for workspace in ml_client.workspaces.list_by_subscription():
+            for ws in workspaces:
                 try:
-                    # Filter by region if specified
-                    if region.lower() != "all" and workspace.location.lower() != region.lower():
+                    # Filter by region (normalize location names)
+                    ws_location = ws.location.lower().replace(" ", "") if ws.location else ""
+                    target_region = region.lower().replace(" ", "")
+                    if target_region != "all" and ws_location != target_region:
                         continue
 
-                    # Get resource group from workspace ID
-                    resource_group = workspace.id.split("/")[4]
+                    # Extract resource group name and workspace name from ID
+                    # Format: /subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.MachineLearningServices/workspaces/{name}
+                    parts = ws.id.split('/')
+                    rg_name = parts[4] if len(parts) > 4 else None
+                    ws_name = parts[-1] if parts else None
+                    if not rg_name or not ws_name:
+                        continue
 
-                    # List compute instances in this workspace
+                    # List compute resources in this workspace using REST API
+                    # (AzureMachineLearningWorkspaces SDK doesn't have .compute attribute)
                     try:
-                        compute_instances = list(ml_client.compute.list(
-                            resource_group_name=resource_group,
-                            workspace_name=workspace.name
-                        ))
-                    except:
+                        url = f'https://management.azure.com/subscriptions/{self.subscription_id}/resourceGroups/{rg_name}/providers/Microsoft.MachineLearningServices/workspaces/{ws_name}/computes?api-version=2023-10-01'
+                        headers = {'Authorization': f'Bearer {token.token}'}
+                        response = requests.get(url, headers=headers, timeout=30)
+
+                        if response.status_code != 200:
+                            self.logger.warning(f"Error fetching computes for workspace {ws_name}: {response.status_code}")
+                            continue
+
+                        data = response.json()
+                        computes = data.get('value', [])
+
+                    except Exception as e:
+                        self.logger.warning(f"Failed to list computes in workspace {ws_name}: {str(e)}")
                         continue
 
-                    for compute in compute_instances:
+                    for compute in computes:
                         try:
+                            compute_name = compute.get('name')
+                            compute_id = compute.get('id')
+                            props = compute.get('properties', {})
+                            compute_type = props.get('computeType')
+
                             # Only process ComputeInstance type (not AML clusters)
-                            compute_type = getattr(compute.properties, 'compute_type', 'Unknown')
                             if compute_type != 'ComputeInstance':
                                 continue
 
-                            # Calculate optimization
+                            # Get compute properties from REST API response
+                            compute_props = props.get('properties', {}) or {}
+                            vm_size = compute_props.get('vmSize', 'Standard_DS1_v2')
+                            state = compute_props.get('state', 'Unknown')
+                            provisioning_state = props.get('provisioningState', 'Unknown')
+                            idle_time_before_shutdown = compute_props.get('idleTimeBeforeShutdown')
+
+                            # Calculate optimization using dict data
                             is_optimizable, score, priority, savings, recommendations = (
-                                self._calculate_ml_compute_optimization(compute)
+                                self._calculate_ml_compute_optimization_from_dict(
+                                    provisioning_state=provisioning_state,
+                                    state=state,
+                                    vm_size=vm_size,
+                                    idle_time_before_shutdown=idle_time_before_shutdown
+                                )
                             )
 
                             # Pricing (Azure US East 2025)
-                            # Standard_DS3_v2 (4 vCPU, 14 GB): $0.21/h = $153/mo
-                            # Standard_NC6 (6 vCPU, 56 GB, 1 GPU): $0.90/h = $657/mo
-                            # Standard_NC24 (24 vCPU, 224 GB, 4 GPU): $3.60/h = $2628/mo
                             pricing_map = {
+                                "Standard_DS1_v2": 53.80,
                                 "Standard_DS3_v2": 153.30,
                                 "Standard_DS4_v2": 306.60,
                                 "Standard_NC6": 657.00,
@@ -15578,47 +15637,32 @@ class AzureInventoryScanner:
                                 "Standard_NC24": 2628.00,
                             }
 
-                            # Get VM size
-                            vm_size = 'Standard_DS3_v2'
-                            compute_properties = getattr(compute.properties, 'properties', None)
-                            if compute_properties and hasattr(compute_properties, 'vm_size'):
-                                vm_size = compute_properties.vm_size
-
                             # Estimate monthly cost
-                            estimated_cost = pricing_map.get(vm_size, 153.30)
-
-                            # Get instance state
-                            provisioning_state = getattr(compute.properties, 'provisioning_state', 'Unknown')
-                            state_dict = {}
-                            if compute_properties:
-                                state = getattr(compute_properties, 'state', 'Unknown')
-                                state_dict['state'] = state
-
-                            # Get auto-shutdown settings
-                            idle_time_before_shutdown = None
-                            if compute_properties and hasattr(compute_properties, 'idle_time_before_shutdown'):
-                                idle_time_before_shutdown = compute_properties.idle_time_before_shutdown
+                            estimated_cost = pricing_map.get(vm_size, 53.80)
 
                             # Detect if GPU instance
                             is_gpu = 'NC' in vm_size or 'ND' in vm_size or 'NV' in vm_size
 
+                            # Get tags
+                            tags = compute.get('tags', {}) or {}
+
                             resources.append(AllCloudResourceData(
-                                resource_id=compute.id,
+                                resource_id=compute_id,
                                 resource_type="azure_ml_compute",
-                                resource_name=compute.name or "Unnamed ML Compute",
-                                region=workspace.location,
+                                resource_name=compute_name or "Unnamed ML Compute",
+                                region=ws_location,
                                 estimated_monthly_cost=round(estimated_cost, 2),
                                 currency="USD",
                                 resource_metadata={
-                                    "compute_id": compute.id,
-                                    "resource_group": resource_group,
-                                    "workspace_name": workspace.name,
+                                    "compute_id": compute_id,
+                                    "resource_group": rg_name,
+                                    "workspace_name": ws_name,
                                     "provisioning_state": provisioning_state,
                                     "vm_size": vm_size,
                                     "is_gpu": is_gpu,
                                     "idle_time_before_shutdown": idle_time_before_shutdown,
-                                    "state": state_dict.get('state', 'Unknown'),
-                                    "tags": dict(compute.tags) if compute.tags else {},
+                                    "state": state,
+                                    "tags": tags,
                                 },
                                 is_optimizable=is_optimizable,
                                 optimization_score=score,
@@ -15630,11 +15674,11 @@ class AzureInventoryScanner:
                             ))
 
                         except Exception as e:
-                            self.logger.error(f"Error processing ML compute {getattr(compute, 'name', 'unknown')}: {str(e)}")
+                            self.logger.error(f"Error processing ML compute {compute.get('name', 'unknown')}: {str(e)}")
                             continue
 
                 except Exception as e:
-                    self.logger.error(f"Error processing ML workspace {getattr(workspace, 'name', 'unknown')}: {str(e)}")
+                    self.logger.error(f"Error processing ML workspace {ws.name if hasattr(ws, 'name') else 'unknown'}: {str(e)}")
                     continue
 
             self.logger.info(f"Found {len(resources)} ML Compute Instances in region {region}")
@@ -15643,6 +15687,130 @@ class AzureInventoryScanner:
         except Exception as e:
             self.logger.error(f"Error scanning ML Compute Instances: {str(e)}")
             return []
+
+    def _calculate_ml_compute_optimization_from_dict(
+        self,
+        provisioning_state: str,
+        state: str,
+        vm_size: str,
+        idle_time_before_shutdown: str | None
+    ) -> tuple[bool, int, str, float, list[dict]]:
+        """
+        Calculate optimization potential for ML Compute Instance from REST API dict data.
+
+        Returns:
+            (is_optimizable, score, priority, potential_savings, recommendations)
+        """
+        is_optimizable = False
+        optimization_score = 0
+        priority = "low"
+        potential_savings = 0.0
+        recommendations = []
+
+        # Pricing map
+        pricing_map = {
+            "Standard_DS1_v2": 53.80,
+            "Standard_DS3_v2": 153.30,
+            "Standard_DS4_v2": 306.60,
+            "Standard_NC6": 657.00,
+            "Standard_NC12": 1314.00,
+            "Standard_NC24": 2628.00,
+        }
+
+        monthly_cost = pricing_map.get(vm_size, 53.80)
+        is_gpu = 'NC' in vm_size or 'ND' in vm_size or 'NV' in vm_size
+
+        # Scenario 1: Instance in error state (CRITICAL - 90)
+        if provisioning_state.lower() in ['failed', 'deleting', 'deleted']:
+            is_optimizable = True
+            optimization_score = max(optimization_score, 90)
+            priority = "critical"
+            potential_savings = max(potential_savings, monthly_cost)
+
+            recommendations.append({
+                "title": "Instance en État d'Erreur",
+                "description": f"Cette instance ML est dans l'état '{provisioning_state}'. Elle génère des coûts inutiles.",
+                "estimated_savings": round(monthly_cost, 2),
+                "actions": [
+                    "Vérifier les logs pour identifier le problème",
+                    "Supprimer l'instance si elle ne peut pas être réparée",
+                    "Recréer l'instance si elle est encore nécessaire"
+                ],
+                "priority": "critical",
+            })
+
+        # Scenario 2: Running instance (HIGH - 70)
+        if state.lower() == 'running':
+            is_optimizable = True
+            optimization_score = max(optimization_score, 70)
+            if priority not in ["critical"]:
+                priority = "high"
+
+            # Assume instance runs but unused 50% of time
+            savings = monthly_cost * 0.5
+            potential_savings = max(potential_savings, savings)
+
+            recommendations.append({
+                "title": "Instance Running - Vérifier l'Activité",
+                "description": "Cette instance ML est en cours d'exécution. Vérifiez si des notebooks sont actifs.",
+                "estimated_savings": round(savings, 2),
+                "actions": [
+                    "Vérifier les notebooks actifs dans le workspace",
+                    "Arrêter l'instance si aucune activité",
+                    "Configurer auto-shutdown pour arrêter automatiquement",
+                    "Utiliser des compute clusters pour workloads batch"
+                ],
+                "priority": "high",
+            })
+
+        # Scenario 3: No auto-shutdown configured (MEDIUM - 50)
+        if not idle_time_before_shutdown:
+            is_optimizable = True
+            optimization_score = max(optimization_score, 50)
+            if priority not in ["critical", "high"]:
+                priority = "medium"
+
+            # Savings from auto-shutdown (assume 67% savings if used 8h/day)
+            savings = monthly_cost * 0.67
+            potential_savings = max(potential_savings, savings)
+
+            recommendations.append({
+                "title": "Auto-Shutdown Non Configuré",
+                "description": "Cette instance n'a pas d'arrêt automatique configuré. Elle peut rester allumée 24/7.",
+                "estimated_savings": round(savings, 2),
+                "actions": [
+                    "Configurer idle_time_before_shutdown dans les paramètres",
+                    "Définir une durée d'inactivité avant arrêt (ex: 30 minutes)",
+                    "Économisez jusqu'à 67% si utilisé seulement 8h/jour"
+                ],
+                "priority": "medium",
+            })
+
+        # Scenario 4: GPU instance (MEDIUM - 50)
+        if is_gpu:
+            is_optimizable = True
+            optimization_score = max(optimization_score, 50)
+            if priority not in ["critical", "high"]:
+                priority = "medium"
+
+            # Savings from switching to CPU instance
+            cpu_cost = 53.80  # Standard_DS1_v2
+            savings = max(0, monthly_cost - cpu_cost)
+            potential_savings = max(potential_savings, savings)
+
+            recommendations.append({
+                "title": "Instance GPU - Vérifier l'Utilisation",
+                "description": f"Instance GPU ({vm_size}) coûte {int(monthly_cost)}$/mois. Vérifiez si GPU est nécessaire.",
+                "estimated_savings": round(savings, 2),
+                "actions": [
+                    "Vérifier si vos notebooks utilisent réellement le GPU",
+                    "Passer à Standard_DS1_v2 (CPU) si GPU non utilisé",
+                    "Utiliser des compute clusters GPU pour workloads batch"
+                ],
+                "priority": "medium",
+            })
+
+        return is_optimizable, optimization_score, priority, potential_savings, recommendations
 
     def _calculate_ml_compute_optimization(self, compute) -> tuple[bool, int, str, float, list[dict]]:
         """
@@ -15808,15 +15976,18 @@ class AzureInventoryScanner:
                 subscription_id=self.subscription_id
             )
 
-            # List all web apps
-            async for site in web_client.web_apps.list():
+            # List all web apps (SDK returns synchronous iterator - must wrap with list())
+            sites = list(web_client.web_apps.list())
+            for site in sites:
                 try:
                     # IMPORTANT: Filter OUT Function Apps (already scanned in scan_function_apps)
                     if site.kind and "functionapp" in site.kind.lower():
                         continue
 
-                    # Filter by region if specified
-                    if region.lower() != "all" and site.location.lower() != region.lower():
+                    # Filter by region if specified (normalize region names - remove spaces)
+                    site_location = site.location.lower().replace(" ", "") if site.location else ""
+                    target_region = region.lower().replace(" ", "")
+                    if target_region != "all" and site_location != target_region:
                         continue
 
                     # Get resource group from site ID
@@ -15892,7 +16063,7 @@ class AzureInventoryScanner:
                         resource_id=site.id,
                         resource_type="azure_app_service",
                         resource_name=site.name or "Unnamed App Service",
-                        region=site.location,
+                        region=site_location,
                         estimated_monthly_cost=round(estimated_cost, 2),
                         currency="USD",
                         resource_metadata={
@@ -22124,8 +22295,8 @@ class AzureInventoryScanner:
                 "commitment_tier_100gb": 200.0,  # 100 GB/day commitment (~20% discount)
             }
 
-            # List all Application Insights components
-            components = client.components.list()
+            # List all Application Insights components (SDK returns synchronous iterator - must wrap with list())
+            components = list(client.components.list())
 
             for component in components:
                 try:
@@ -22133,6 +22304,13 @@ class AzureInventoryScanner:
                     component_name = component.name
                     resource_group = component.id.split("/")[4] if "/" in component.id else "unknown"
                     location = component.location if hasattr(component, "location") else region
+
+                    # Filter by region if specified (normalize region names - remove spaces)
+                    component_location = location.lower().replace(" ", "") if location else ""
+                    target_region = region.lower().replace(" ", "")
+                    if target_region != "all" and component_location != target_region:
+                        continue
+
                     provisioning_state = component.provisioning_state if hasattr(component, "provisioning_state") else "Unknown"
                     application_type = component.application_type if hasattr(component, "application_type") else "other"
 

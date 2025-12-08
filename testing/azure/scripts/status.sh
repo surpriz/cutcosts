@@ -27,6 +27,11 @@ fi
 # Source .env
 source "$PROJECT_DIR/.env"
 
+# Export batch control variables from .env
+export TF_VAR_enable_batch_1="${TF_VAR_enable_batch_1:-true}"
+export TF_VAR_enable_batch_2="${TF_VAR_enable_batch_2:-false}"
+export TF_VAR_enable_batch_3="${TF_VAR_enable_batch_3:-false}"
+
 # Change to terraform directory
 cd "$PROJECT_DIR/terraform"
 
@@ -116,11 +121,57 @@ if [ "${TF_VAR_enable_batch_1}" = "true" ]; then
     echo ""
 fi
 
+# Batch 3 Resources
+if [ "${TF_VAR_enable_batch_3}" = "true" ]; then
+    echo -e "${BLUE}Batch 3 Resources (Advanced):${NC}"
+
+    # Container App
+    CONTAINER_APP_NAME=$(terraform output -json batch_3_resources 2>/dev/null | grep -o '"container_app_name":"[^"]*' | cut -d'"' -f4)
+    if [ -n "$CONTAINER_APP_NAME" ] && [ "$CONTAINER_APP_NAME" != "null" ]; then
+        echo "  ✓ Container App: $CONTAINER_APP_NAME - Idle (0 replicas) (~€15/month)"
+    fi
+
+    # Virtual Desktop Host Pool
+    HOST_POOL_NAME=$(terraform output -json batch_3_resources 2>/dev/null | grep -o '"host_pool_name":"[^"]*' | cut -d'"' -f4)
+    if [ -n "$HOST_POOL_NAME" ] && [ "$HOST_POOL_NAME" != "null" ]; then
+        echo "  ✓ Virtual Desktop Host Pool: $HOST_POOL_NAME - No sessions"
+    fi
+
+    # Session Host VM
+    SESSION_HOST_NAME=$(terraform output -json batch_3_resources 2>/dev/null | grep -o '"session_host_vm_name":"[^"]*' | cut -d'"' -f4)
+    if [ -n "$SESSION_HOST_NAME" ] && [ "$SESSION_HOST_NAME" != "null" ]; then
+        VM_STATE=$(az vm show -g "$RG_NAME" -n "$SESSION_HOST_NAME" --query "powerState" -o tsv 2>/dev/null || echo "unknown")
+        echo "  ✓ Session Host VM: $SESSION_HOST_NAME - $VM_STATE (~€50/month total VD)"
+    fi
+
+    # Azure ML Workspace
+    ML_WORKSPACE_NAME=$(terraform output -json batch_3_resources 2>/dev/null | grep -o '"ml_workspace_name":"[^"]*' | cut -d'"' -f4)
+    if [ -n "$ML_WORKSPACE_NAME" ] && [ "$ML_WORKSPACE_NAME" != "null" ]; then
+        echo "  ✓ ML Workspace: $ML_WORKSPACE_NAME"
+    fi
+
+    # ML Compute Instance
+    ML_COMPUTE_NAME=$(terraform output -json batch_3_resources 2>/dev/null | grep -o '"ml_compute_instance_name":"[^"]*' | cut -d'"' -f4)
+    if [ -n "$ML_COMPUTE_NAME" ] && [ "$ML_COMPUTE_NAME" != "null" ]; then
+        echo "  ✓ ML Compute Instance: $ML_COMPUTE_NAME - Idle (~€30/month)"
+    fi
+
+    # Web App
+    WEB_APP_NAME=$(terraform output -json batch_3_resources 2>/dev/null | grep -o '"web_app_name":"[^"]*' | cut -d'"' -f4)
+    if [ -n "$WEB_APP_NAME" ] && [ "$WEB_APP_NAME" != "null" ]; then
+        WEB_APP_URL=$(terraform output -json batch_3_resources 2>/dev/null | grep -o '"web_app_url":"[^"]*' | cut -d'"' -f4)
+        echo "  ✓ Web App: $WEB_APP_NAME - Zero traffic (~€10/month)"
+        [ -n "$WEB_APP_URL" ] && echo "    URL: https://$WEB_APP_URL"
+    fi
+
+    echo ""
+fi
+
 # Calculate total cost
 TOTAL_COST=0
 [ "${TF_VAR_enable_batch_1}" = "true" ] && TOTAL_COST=$((TOTAL_COST + 68))
 [ "${TF_VAR_enable_batch_2}" = "true" ] && TOTAL_COST=$((TOTAL_COST + 71))
-[ "${TF_VAR_enable_batch_3}" = "true" ] && TOTAL_COST=$((TOTAL_COST + 0))
+[ "${TF_VAR_enable_batch_3}" = "true" ] && TOTAL_COST=$((TOTAL_COST + 105))
 
 echo -e "${YELLOW}=========================================="
 echo "Estimated Total Cost: ~€${TOTAL_COST}/month"
