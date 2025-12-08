@@ -71,7 +71,7 @@ jobs:
           REDIS_URL: redis://localhost:6379/0
           SECRET_KEY: test-secret-key-for-ci
           JWT_SECRET_KEY: test-jwt-secret-key-for-ci
-          ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          ENCRYPTION_KEY: TlvEOufxOUzZnrGIv-D3XLMYxQek-8fAIx_H0GSoeKk=
           DEBUG: "False"
           APP_ENV: test
           # ALLOWED_ORIGINS uses default from config.py (localhost:3000)
