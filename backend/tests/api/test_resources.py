@@ -16,7 +16,14 @@ from app.models.user import User
 @pytest.fixture
 async def test_cloud_account(db_session: AsyncSession, test_user: User) -> CloudAccount:
     """Create a test cloud account."""
-    from app.core.security import encrypt_credentials
+    import json
+    from app.core.security import credential_encryption
+
+    credentials = {
+        "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+        "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    }
+    encrypted = credential_encryption.encrypt(json.dumps(credentials))
 
     account = CloudAccount(
         id=uuid.uuid4(),
@@ -24,10 +31,7 @@ async def test_cloud_account(db_session: AsyncSession, test_user: User) -> Cloud
         provider="aws",
         account_name="Test AWS Account",
         account_identifier="123456789012",
-        credentials_encrypted=encrypt_credentials({
-            "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
-            "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-        }),
+        credentials_encrypted=encrypted,
         regions=["us-east-1"],
         is_active=True,
     )
