@@ -47,7 +47,7 @@ async def test_scan(
 ) -> Scan:
     """Create a test scan."""
     scan = Scan(
-        id=str(uuid.uuid4()),
+        id=uuid.uuid4(),
         cloud_account_id=test_cloud_account.id,
         status=ScanStatus.COMPLETED,
         scan_type=ScanType.MANUAL,
