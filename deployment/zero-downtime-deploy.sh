@@ -111,6 +111,18 @@ set +a
 print_success "Environment loaded"
 
 # ============================================================================
+# Step 0.5: Pre-Deploy Checks
+# ============================================================================
+
+print_step "Running pre-deploy checks..."
+if bash deployment/pre-deploy-check.sh; then
+    print_success "Pre-deploy checks passed"
+else
+    print_error "Pre-deploy checks failed"
+    exit 1
+fi
+
+# ============================================================================
 # Step 0: Display Current Status
 # ============================================================================
 
