@@ -74,7 +74,7 @@ jobs:
           ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
           DEBUG: "False"
           APP_ENV: test
-          ALLOWED_ORIGINS: http://localhost:3000
+          # ALLOWED_ORIGINS uses default from config.py (localhost:3000)
 
       - name: Upload coverage reports
         uses: codecov/codecov-action@v4
