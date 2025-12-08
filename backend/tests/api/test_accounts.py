@@ -21,6 +21,7 @@ class TestAccountsAPI:
         mock_validate,
         authenticated_async_client: AsyncClient,
         test_user: User,
+        free_subscription_plan,  # Required for subscription limits check
     ):
         """Test creating an AWS cloud account with valid credentials."""
         # Mock successful AWS validation
@@ -54,7 +55,9 @@ class TestAccountsAPI:
 
     @pytest.mark.asyncio
     async def test_create_account_missing_aws_credentials(
-        self, authenticated_async_client: AsyncClient
+        self,
+        authenticated_async_client: AsyncClient,
+        free_subscription_plan,  # Required for subscription limits check
     ):
         """Test creating AWS account without credentials returns 400."""
         account_data = {
@@ -74,7 +77,10 @@ class TestAccountsAPI:
     @pytest.mark.asyncio
     @patch("app.api.v1.accounts.validate_aws_credentials")
     async def test_create_account_invalid_aws_credentials(
-        self, mock_validate, authenticated_async_client: AsyncClient
+        self,
+        mock_validate,
+        authenticated_async_client: AsyncClient,
+        free_subscription_plan,  # Required for subscription limits check
     ):
         """Test creating AWS account with invalid credentials returns 400."""
         # Mock AWS validation failure

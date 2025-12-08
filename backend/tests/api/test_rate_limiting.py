@@ -9,6 +9,12 @@ from fastapi.testclient import TestClient
 
 from app.core.config import settings
 
+# Skip rate limiting tests if rate limiting is disabled
+pytestmark = pytest.mark.skipif(
+    not settings.RATE_LIMIT_ENABLED,
+    reason="Rate limiting is disabled (RATE_LIMIT_ENABLED=false)"
+)
+
 
 def parse_rate_limit(limit_str: str) -> tuple[int, int]:
     """
