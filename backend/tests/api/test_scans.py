@@ -50,7 +50,7 @@ async def test_scan(
         id=str(uuid.uuid4()),
         cloud_account_id=test_cloud_account.id,
         status=ScanStatus.COMPLETED,
-        scan_type=ScanType.ORPHAN,
+        scan_type=ScanType.MANUAL,
         total_resources_scanned=100,
         orphan_resources_found=5,
         estimated_monthly_waste=50.0,
