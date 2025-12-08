@@ -60,6 +60,9 @@ async def check_cloud_account_limit(
 ) -> User:
     """Dependency to check if user can add more cloud accounts.
 
+    For free tier users, checks against free tier limits (default 2 accounts).
+    Uses get_or_create_user_subscription to auto-create free subscription if none exists.
+
     Args:
         current_user: Current authenticated user
         db: Database session
@@ -71,6 +74,11 @@ async def check_cloud_account_limit(
         HTTPException: If cloud account limit exceeded
     """
     service = SubscriptionService(db)
+
+    # Get or create subscription (auto-creates free subscription if none exists)
+    # This ensures users without explicit subscriptions get the free tier
+    await service.get_or_create_user_subscription(current_user.id)
+
     can_add, error_message = await service.check_cloud_account_limit(current_user.id)
 
     if not can_add:
