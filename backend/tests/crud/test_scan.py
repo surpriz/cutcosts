@@ -301,22 +301,35 @@ class TestScanCRUD:
     @pytest.mark.asyncio
     async def test_get_scan_statistics(self, db_session: AsyncSession, test_user: User):
         """Test getting scan statistics."""
-        # Create cloud account
-        account_data = CloudAccountCreate(
+        # Create two cloud accounts so we can test statistics summing across accounts
+        # Note: get_scan_statistics only counts the latest scan per account to avoid
+        # duplicate counting, so we need separate accounts to test the sum
+        account1_data = CloudAccountCreate(
             provider="aws",
-            account_name="Test AWS",
+            account_name="Test AWS 1",
             account_identifier="123456789012",
-            aws_access_key_id="AKIAIOSFODNN7EXAMPLE",
-            aws_secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            aws_access_key_id="AKIAIOSFODNN7EXAMPLE1",
+            aws_secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLE1",
         )
-        account = await cloud_account_crud.create_cloud_account(
-            db_session, test_user.id, account_data
+        account1 = await cloud_account_crud.create_cloud_account(
+            db_session, test_user.id, account1_data
+        )
+
+        account2_data = CloudAccountCreate(
+            provider="aws",
+            account_name="Test AWS 2",
+            account_identifier="123456789013",
+            aws_access_key_id="AKIAIOSFODNN7EXAMPLE2",
+            aws_secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLE2",
+        )
+        account2 = await cloud_account_crud.create_cloud_account(
+            db_session, test_user.id, account2_data
         )
 
         # Create scans with different statuses
-        # Completed scan 1
+        # Completed scan 1 (on account 1)
         scan1 = await scan_crud.create_scan(
-            db_session, ScanCreate(cloud_account_id=account.id)
+            db_session, ScanCreate(cloud_account_id=account1.id)
         )
         await scan_crud.update_scan(
             db_session,
@@ -329,9 +342,9 @@ class TestScanCRUD:
             ),
         )
 
-        # Completed scan 2
+        # Completed scan 2 (on account 2)
         scan2 = await scan_crud.create_scan(
-            db_session, ScanCreate(cloud_account_id=account.id)
+            db_session, ScanCreate(cloud_account_id=account2.id)
         )
         await scan_crud.update_scan(
             db_session,
@@ -344,9 +357,9 @@ class TestScanCRUD:
             ),
         )
 
-        # Failed scan
+        # Failed scan (on account 1)
         scan3 = await scan_crud.create_scan(
-            db_session, ScanCreate(cloud_account_id=account.id)
+            db_session, ScanCreate(cloud_account_id=account1.id)
         )
         await scan_crud.update_scan(
             db_session,
@@ -357,9 +370,9 @@ class TestScanCRUD:
             ),
         )
 
-        # Pending scan
+        # Pending scan (on account 1)
         await scan_crud.create_scan(
-            db_session, ScanCreate(cloud_account_id=account.id)
+            db_session, ScanCreate(cloud_account_id=account1.id)
         )
 
         # Get statistics
@@ -368,7 +381,7 @@ class TestScanCRUD:
         assert stats["total_scans"] == 4
         assert stats["completed_scans"] == 2
         assert stats["failed_scans"] == 1
-        assert stats["total_orphan_resources"] == 25  # 10 + 15
+        assert stats["total_orphan_resources"] == 25  # 10 + 15 (latest scan per account)
         assert stats["total_monthly_waste"] == 300.50  # 100.0 + 200.50
         assert stats["last_scan_at"] is not None
 
