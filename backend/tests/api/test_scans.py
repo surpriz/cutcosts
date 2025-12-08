@@ -103,7 +103,8 @@ async def test_get_scan_by_id(
     assert response.status_code == 200
     data = response.json()
     assert data["id"] == str(test_scan.id)  # API returns UUID as string
-    assert data["status"] == test_scan.status.value
+    # Status is stored as string in DB, compare directly
+    assert data["status"] == test_scan.status
 
 
 @pytest.mark.asyncio
@@ -141,6 +142,7 @@ async def test_create_scan_requires_auth(async_client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_create_scan_invalid_account(
     authenticated_async_client: AsyncClient,
+    free_subscription_plan,  # Required for subscription check
 ) -> None:
     """Test that creating scan with non-existent account fails."""
     fake_account_id = str(uuid.uuid4())
@@ -158,6 +160,7 @@ async def test_create_scan_success(
     mock_celery_delay: AsyncMock,
     authenticated_async_client: AsyncClient,
     test_cloud_account: CloudAccount,
+    free_subscription_plan,  # Required for subscription check
 ) -> None:
     """Test successful scan creation."""
     # Mock Celery task to avoid actual execution

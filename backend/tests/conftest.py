@@ -15,6 +15,7 @@ from app.core.config import settings
 from app.core.database import Base, get_db
 from app.main import app
 from app.models.user import User
+from app.models.subscription_plan import SubscriptionPlan
 
 # Use SQLite in-memory database for tests (faster and no setup needed)
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -130,6 +131,32 @@ async def test_superuser(db_session: AsyncSession) -> User:
     await db_session.commit()
     await db_session.refresh(user)
     return user
+
+
+@pytest.fixture
+async def free_subscription_plan(db_session: AsyncSession) -> SubscriptionPlan:
+    """Create a free subscription plan for tests that require subscriptions."""
+    from decimal import Decimal
+
+    plan = SubscriptionPlan(
+        name="free",
+        display_name="Free",
+        description="Free plan for testing",
+        price_monthly=Decimal("0.00"),
+        currency="EUR",
+        max_scans_per_month=5,
+        max_cloud_accounts=2,
+        has_ai_chat=False,
+        has_impact_tracking=False,
+        has_email_notifications=False,
+        has_api_access=False,
+        has_priority_support=False,
+        is_active=True,
+    )
+    db_session.add(plan)
+    await db_session.commit()
+    await db_session.refresh(plan)
+    return plan
 
 
 @pytest.fixture

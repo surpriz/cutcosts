@@ -162,7 +162,7 @@ async def test_get_resource_by_id(
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["id"] == test_orphan_resource.id
+    assert data["id"] == str(test_orphan_resource.id)  # API returns UUID as string
     assert data["resource_type"] == "ebs_volume"
 
 
