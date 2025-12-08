@@ -8,7 +8,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.cloud_account import CloudAccount, CloudProvider
+from app.models.cloud_account import CloudAccount
 from app.models.scan import Scan, ScanStatus, ScanType
 from app.models.user import User
 
@@ -19,9 +19,10 @@ async def test_cloud_account(db_session: AsyncSession, test_user: User) -> Cloud
     from app.core.security import encrypt_credentials
 
     account = CloudAccount(
-        id=str(uuid.uuid4()),
+        id=uuid.uuid4(),
         user_id=test_user.id,
-        provider=CloudProvider.AWS,
+        provider="aws",
+        account_name="Test AWS Account",
         account_identifier="123456789012",
         credentials_encrypted=encrypt_credentials({
             "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
