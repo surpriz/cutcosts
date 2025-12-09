@@ -5,6 +5,7 @@ on:
     branches: [master, develop]
   pull_request:
     branches: [master]
+  workflow_call:  # Permet à d'autres workflows d'appeler celui-ci (ex: deploy-production.yml)
 
 jobs:
   backend-tests:
