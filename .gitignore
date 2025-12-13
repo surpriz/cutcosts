@@ -115,8 +115,5 @@ coverage/
 
 #Directories and files to ignore
 docs/
-claude_code_rules.md
-CLAUDE.md
 last_points.md
-.claudeignore
 testing/azure/README.md
