@@ -56,11 +56,210 @@ else:
 # Create FastAPI application
 app = FastAPI(
     title=settings.APP_NAME,
-    description="CutCosts - Detect and identify orphaned cloud resources",
+    description="""
+# CutCosts API - Cloud Waste Detection Platform
+
+Detect and eliminate orphaned cloud resources across AWS, Azure, GCP, and Microsoft 365.
+
+## Authentication
+
+All endpoints (except `/api/v1/auth/register` and `/api/v1/auth/login`) require JWT authentication.
+
+### Getting Started
+
+1. **Register**: `POST /api/v1/auth/register`
+2. **Verify Email**: Check your email and click the verification link
+3. **Login**: `POST /api/v1/auth/login` → Returns `access_token` and `refresh_token`
+4. **Use Token**: Include in `Authorization` header: `Bearer <access_token>`
+5. **Refresh**: Use `POST /api/v1/auth/refresh` when token expires
+
+### Token Lifetimes
+- **Access Token**: 30 minutes
+- **Refresh Token**: 7 days (30 days with "remember me")
+
+### Example Authentication Flow
+
+```bash
+# 1. Register
+curl -X POST https://api.cutcosts.com/api/v1/auth/register \\
+  -H "Content-Type: application/json" \\
+  -d '{"email": "user@example.com", "password": "securepass123", "full_name": "John Doe"}'
+
+# 2. Login after email verification
+curl -X POST https://api.cutcosts.com/api/v1/auth/login \\
+  -H "Content-Type: application/x-www-form-urlencoded" \\
+  -d "username=user@example.com&password=securepass123"
+
+# Response:
+# {
+#   "access_token": "eyJhbGc...",
+#   "refresh_token": "eyJhbGc...",
+#   "token_type": "bearer"
+# }
+
+# 3. Use token for authenticated requests
+curl -X GET https://api.cutcosts.com/api/v1/accounts \\
+  -H "Authorization: Bearer eyJhbGc..."
+```
+
+## Rate Limiting
+
+Rate limits are applied per endpoint to ensure fair usage:
+
+| Endpoint Category | Rate Limit |
+|-------------------|------------|
+| Authentication endpoints | 5 requests/minute |
+| Scan operations | 10 requests/hour |
+| Standard endpoints | 60 requests/minute |
+
+Rate limit headers are included in responses:
+- `X-RateLimit-Limit`: Request limit
+- `X-RateLimit-Remaining`: Remaining requests
+- `X-RateLimit-Reset`: Reset timestamp
+
+When rate limit is exceeded, you'll receive a `429 Too Many Requests` response.
+
+## Subscription Plans
+
+Different features and limits based on your subscription tier:
+
+| Feature | Free | Pro | Enterprise |
+|---------|------|-----|------------|
+| Cloud Accounts | 1 | 5 | Unlimited |
+| Scans per Month | 10 | 100 | Unlimited |
+| Detection Rules | Default | Custom | Custom |
+| API Access | Limited | Full | Full |
+| Support | Community | Email | Priority |
+
+Upgrade your plan at `/api/v1/subscriptions` or through the web dashboard.
+
+## Error Handling
+
+All errors follow a consistent format:
+
+```json
+{
+  "detail": "Error message describing what went wrong"
+}
+```
+
+Common HTTP status codes:
+- `200`/`201`: Success
+- `400`: Bad request (validation error, invalid input)
+- `401`: Unauthorized (missing/invalid token)
+- `403`: Forbidden (insufficient permissions or subscription limits)
+- `404`: Not found
+- `422`: Validation error (Pydantic schema validation)
+- `429`: Rate limit exceeded
+- `500`: Internal server error
+
+## Multi-Cloud Support
+
+CutCosts supports multiple cloud providers:
+
+- **AWS**: EC2, EBS, RDS, S3, and more
+- **Azure**: Virtual Machines, Disks, Storage, SQL, and more
+- **GCP**: Compute Engine, Persistent Disks, Cloud Storage, and more
+- **Microsoft 365**: SharePoint, OneDrive, Teams, and more
+
+Each provider requires specific credentials (see `/api/v1/accounts` endpoints for details).
+
+## Getting Help
+
+- **Documentation**: `/api/docs` (Swagger UI) or `/api/redoc` (ReDoc)
+- **Health Check**: `/api/v1/health`
+- **Support**: support@cutcosts.com
+- **Status Page**: status.cutcosts.com
+""",
     version="1.0.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
+    openapi_tags=[
+        {
+            "name": "authentication",
+            "description": "User registration, login, email verification, password management, and account updates. "
+                          "Public endpoints: `/register` and `/login`. All other endpoints require JWT authentication.",
+        },
+        {
+            "name": "cloud-accounts",
+            "description": "Manage multi-cloud account connections (AWS, Azure, GCP, Microsoft 365). "
+                          "Create accounts, validate credentials, and configure scheduled scans. "
+                          "Credentials are encrypted using Fernet encryption before storage.",
+        },
+        {
+            "name": "scans",
+            "description": "Trigger and manage cloud resource scans for waste detection. "
+                          "Scans run asynchronously using Celery. Monitor progress in real-time "
+                          "and retrieve results when complete. Supports manual and scheduled scans.",
+        },
+        {
+            "name": "resources",
+            "description": "View and manage detected orphaned resources. "
+                          "Filter by provider, resource type, region, and status. "
+                          "Mark resources for deletion or ignore them. Includes cost estimates.",
+        },
+        {
+            "name": "detection-rules",
+            "description": "Customize detection rules for different resource types. "
+                          "Define thresholds, conditions, and exclusions. "
+                          "Override default rules with custom logic per resource type.",
+        },
+        {
+            "name": "cost-intelligence",
+            "description": "Cost analysis, inventory management, and optimization recommendations. "
+                          "Get detailed cost breakdowns by provider, region, and resource type.",
+        },
+        {
+            "name": "impact-savings",
+            "description": "Calculate impact and savings from detected orphaned resources. "
+                          "Track historical savings and export reports.",
+        },
+        {
+            "name": "subscriptions",
+            "description": "Manage subscription plans and billing. "
+                          "View current plan, usage limits, and upgrade options. "
+                          "Stripe integration for payment processing.",
+        },
+        {
+            "name": "user-preferences",
+            "description": "User settings and preferences. "
+                          "Configure email notifications, UI preferences, and default settings.",
+        },
+        {
+            "name": "gdpr-compliance",
+            "description": "GDPR compliance endpoints for data export and deletion. "
+                          "Request complete data export or account deletion per GDPR Article 17.",
+        },
+        {
+            "name": "ai-assistant",
+            "description": "AI-powered assistant for cloud cost optimization advice. "
+                          "Ask questions about your resources, get recommendations, and analyze patterns.",
+        },
+        {
+            "name": "admin",
+            "description": "Admin-only endpoints for user management, system configuration, and platform administration. "
+                          "Requires superuser permissions.",
+        },
+        {
+            "name": "admin-pricing",
+            "description": "Admin endpoints for managing subscription plans and pricing tiers. "
+                          "Create, update, and delete subscription plans.",
+        },
+        {
+            "name": "health",
+            "description": "Health check and system status endpoints. Public access, no authentication required.",
+        },
+        {
+            "name": "root",
+            "description": "Root API endpoint with links to documentation and health check.",
+        },
+        {
+            "name": "testing",
+            "description": "Testing endpoints for development and debugging. "
+                          "Available in development mode only. Not for production use.",
+        },
+    ],
 )
 
 # Configure rate limiting

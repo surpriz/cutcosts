@@ -30,7 +30,137 @@ router = APIRouter()
 logger = structlog.get_logger()
 
 
-@router.post("/register", response_model=UserSchema, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/register",
+    response_model=UserSchema,
+    status_code=status.HTTP_201_CREATED,
+    summary="Register a new user account",
+    description=r"""
+Register a new user account and send email verification.
+
+## Process
+1. Validates email is not already registered
+2. Creates user account with hashed password
+3. Creates free subscription for the new user
+4. Sends verification email with token
+5. Returns user details (email_verified=False)
+
+**Important**: Users must verify their email before logging in.
+
+## Code Examples
+
+### cURL
+\```bash
+curl -X POST https://api.cutcosts.com/api/v1/auth/register \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "email": "user@example.com",
+    "password": "securepass123",
+    "full_name": "John Doe"
+  }'
+\```
+
+### Python (httpx)
+\```python
+import httpx
+
+url = "https://api.cutcosts.com/api/v1/auth/register"
+data = {
+    "email": "user@example.com",
+    "password": "securepass123",
+    "full_name": "John Doe"
+}
+
+response = httpx.post(url, json=data)
+user = response.json()
+print(f"User created: {user['id']}, email_verified: {user['email_verified']}")
+\```
+
+### JavaScript (fetch)
+\```javascript
+const response = await fetch('https://api.cutcosts.com/api/v1/auth/register', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({
+    email: 'user@example.com',
+    password: 'securepass123',
+    full_name: 'John Doe'
+  })
+});
+const user = await response.json();
+console.log('Check your email for verification link');
+\```
+
+## Rate Limiting
+Limited to 5 requests per minute to prevent abuse.
+
+## Security
+- Password is hashed using bcrypt with cost factor 12
+- Email verification required before login
+- Free subscription automatically created
+""",
+    response_description="User account created successfully, verification email sent",
+    responses={
+        201: {
+            "description": "User created successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": "123e4567-e89b-12d3-a456-426614174000",
+                        "email": "user@example.com",
+                        "full_name": "John Doe",
+                        "is_active": True,
+                        "email_verified": False,
+                        "is_superuser": False,
+                        "created_at": "2024-01-15T10:30:00Z",
+                        "updated_at": "2024-01-15T10:30:00Z"
+                    }
+                }
+            }
+        },
+        400: {
+            "description": "Email already registered",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Email already registered"}
+                }
+            }
+        },
+        422: {
+            "description": "Validation error",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": [
+                            {
+                                "type": "string_too_short",
+                                "loc": ["body", "password"],
+                                "msg": "String should have at least 8 characters",
+                                "input": "short"
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+        429: {
+            "description": "Rate limit exceeded",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Rate limit exceeded: 5 per 1 minute"}
+                }
+            }
+        },
+        500: {
+            "description": "Internal server error",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Internal server error"}
+                }
+            }
+        }
+    }
+)
 @auth_register_limit
 async def register(
     request: Request,
@@ -104,7 +234,145 @@ async def register(
     return user
 
 
-@router.post("/login", response_model=Token)
+@router.post(
+    "/login",
+    response_model=Token,
+    summary="Login and get access tokens",
+    description=r"""
+Authenticate user and receive JWT access and refresh tokens.
+
+## Requirements
+- Email must be verified before login
+- Correct email and password required
+
+## Token Types
+- **Access Token**: Short-lived (30 minutes), used for API requests
+- **Refresh Token**: Long-lived (7 or 30 days), used to get new access tokens
+
+## Remember Me
+Set `remember_me=true` to extend refresh token lifetime to 30 days instead of 7 days.
+
+## Code Examples
+
+### cURL
+\```bash
+curl -X POST https://api.cutcosts.com/api/v1/auth/login \\
+  -H "Content-Type: application/x-www-form-urlencoded" \\
+  -d "username=user@example.com&password=securepass123&remember_me=false"
+\```
+
+### Python (httpx)
+\```python
+import httpx
+
+url = "https://api.cutcosts.com/api/v1/auth/login"
+data = {
+    "username": "user@example.com",
+    "password": "securepass123",
+    "remember_me": False
+}
+
+response = httpx.post(url, data=data)
+tokens = response.json()
+
+# Store tokens securely
+access_token = tokens["access_token"]
+refresh_token = tokens["refresh_token"]
+
+# Use access_token for authenticated requests
+headers = {"Authorization": f"Bearer {access_token}"}
+\```
+
+### JavaScript (fetch)
+\```javascript
+const formData = new URLSearchParams({
+  username: 'user@example.com',
+  password: 'securepass123',
+  remember_me: 'false'
+});
+
+const response = await fetch('https://api.cutcosts.com/api/v1/auth/login', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+  body: formData
+});
+
+const tokens = await response.json();
+// Store tokens in localStorage or secure storage
+localStorage.setItem('access_token', tokens.access_token);
+localStorage.setItem('refresh_token', tokens.refresh_token);
+\```
+
+## Rate Limiting
+Limited to 5 requests per minute to prevent brute force attacks.
+
+## Security Notes
+- Always use HTTPS in production
+- Store tokens securely (httpOnly cookies recommended for web apps)
+- Never expose tokens in client-side code or logs
+""",
+    response_description="Authentication successful, tokens returned",
+    responses={
+        200: {
+            "description": "Login successful",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+                        "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+                        "token_type": "bearer"
+                    }
+                }
+            }
+        },
+        401: {
+            "description": "Invalid credentials",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "incorrect_credentials": {
+                            "summary": "Wrong email or password",
+                            "value": {"detail": "Incorrect email or password"}
+                        }
+                    }
+                }
+            }
+        },
+        403: {
+            "description": "Account inactive or email not verified",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "email_not_verified": {
+                            "summary": "Email not verified",
+                            "value": {"detail": "Email not verified. Please check your email and click the verification link."}
+                        },
+                        "inactive_user": {
+                            "summary": "Account inactive",
+                            "value": {"detail": "Inactive user"}
+                        }
+                    }
+                }
+            }
+        },
+        429: {
+            "description": "Rate limit exceeded",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Rate limit exceeded: 5 per 1 minute"}
+                }
+            }
+        },
+        500: {
+            "description": "Internal server error",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Internal server error"}
+                }
+            }
+        }
+    }
+)
 @auth_login_limit
 async def login(
     request: Request,
@@ -172,7 +440,123 @@ async def login(
     }
 
 
-@router.post("/refresh", response_model=Token)
+@router.post(
+    "/refresh",
+    response_model=Token,
+    summary="Refresh access token",
+    description=r"""
+Get new access and refresh tokens using a valid refresh token.
+
+## When to Use
+Call this endpoint when your access token expires (after 30 minutes) to get a new one without requiring the user to login again.
+
+## Code Examples
+
+### cURL
+\```bash
+curl -X POST https://api.cutcosts.com/api/v1/auth/refresh \\
+  -H "Content-Type: application/json" \\
+  -d '{"refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."}'
+\```
+
+### Python (httpx)
+\```python
+import httpx
+
+url = "https://api.cutcosts.com/api/v1/auth/refresh"
+data = {"refresh_token": refresh_token}
+
+response = httpx.post(url, json=data)
+tokens = response.json()
+
+# Update stored tokens
+access_token = tokens["access_token"]
+refresh_token = tokens["refresh_token"]
+\```
+
+### JavaScript (fetch)
+\```javascript
+const response = await fetch('https://api.cutcosts.com/api/v1/auth/refresh', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({
+    refresh_token: localStorage.getItem('refresh_token')
+  })
+});
+
+const tokens = await response.json();
+localStorage.setItem('access_token', tokens.access_token);
+localStorage.setItem('refresh_token', tokens.refresh_token);
+\```
+
+## Rate Limiting
+Limited to 10 requests per minute.
+""",
+    response_description="New tokens generated successfully",
+    responses={
+        200: {
+            "description": "Tokens refreshed successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+                        "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+                        "token_type": "bearer"
+                    }
+                }
+            }
+        },
+        401: {
+            "description": "Invalid or expired refresh token",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "invalid_token": {
+                            "summary": "Invalid refresh token",
+                            "value": {"detail": "Invalid refresh token"}
+                        },
+                        "wrong_type": {
+                            "summary": "Wrong token type",
+                            "value": {"detail": "Invalid token type"}
+                        }
+                    }
+                }
+            }
+        },
+        403: {
+            "description": "User account inactive",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Inactive user"}
+                }
+            }
+        },
+        404: {
+            "description": "User not found",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "User not found"}
+                }
+            }
+        },
+        429: {
+            "description": "Rate limit exceeded",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Rate limit exceeded: 10 per 1 minute"}
+                }
+            }
+        },
+        500: {
+            "description": "Internal server error",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Internal server error"}
+                }
+            }
+        }
+    }
+)
 @auth_refresh_limit
 async def refresh_token(
     request: Request,
@@ -252,7 +636,45 @@ async def refresh_token(
     }
 
 
-@router.get("/me", response_model=UserSchema)
+@router.get(
+    "/me",
+    response_model=UserSchema,
+    summary="Get current user profile",
+    description="""
+Get information about the currently authenticated user.
+
+Requires valid access token in Authorization header.
+""",
+    response_description="Current user profile",
+    responses={
+        200: {
+            "description": "User profile retrieved successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": "123e4567-e89b-12d3-a456-426614174000",
+                        "email": "user@example.com",
+                        "full_name": "John Doe",
+                        "is_active": True,
+                        "email_verified": True,
+                        "is_superuser": False,
+                        "email_scan_notifications": True,
+                        "created_at": "2024-01-15T10:30:00Z",
+                        "updated_at": "2024-01-15T10:30:00Z"
+                    }
+                }
+            }
+        },
+        401: {
+            "description": "Authentication required",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Could not validate credentials"}
+                }
+            }
+        }
+    }
+)
 async def get_current_user_info(
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> User:
@@ -268,7 +690,34 @@ async def get_current_user_info(
     return current_user
 
 
-@router.get("/verify-email/{token}")
+@router.get(
+    "/verify-email/{token}",
+    summary="Verify email address",
+    description="""
+Verify user email address using the token sent via email after registration.
+
+Users receive this link in their registration email. After verification, they can login.
+""",
+    response_description="Email verified successfully",
+    responses={
+        200: {
+            "description": "Email verified successfully",
+            "content": {
+                "application/json": {
+                    "example": {"message": "Email verified successfully. You can now login."}
+                }
+            }
+        },
+        400: {
+            "description": "Invalid or expired token",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Invalid or expired verification token"}
+                }
+            }
+        }
+    }
+)
 async def verify_email(
     token: str,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -323,7 +772,52 @@ async def verify_email(
     }
 
 
-@router.post("/resend-verification")
+@router.post(
+    "/resend-verification",
+    summary="Resend verification email",
+    description="""
+Resend email verification link to user's email address.
+
+Use this if the user didn't receive the initial verification email or if the token expired.
+
+**Rate Limited**: 5 requests/minute to prevent email spam.
+""",
+    response_description="Verification email resent",
+    responses={
+        200: {
+            "description": "Verification email sent (or email already verified)",
+            "content": {
+                "application/json": {
+                    "example": {"message": "If the email exists and is not verified, a new verification email has been sent."}
+                }
+            }
+        },
+        400: {
+            "description": "Email already verified",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Email already verified"}
+                }
+            }
+        },
+        429: {
+            "description": "Rate limit exceeded",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Rate limit exceeded: 5 per 1 minute"}
+                }
+            }
+        },
+        500: {
+            "description": "Failed to send email",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Failed to send verification email"}
+                }
+            }
+        }
+    }
+)
 @auth_register_limit  # Same limit as register to prevent email spam
 async def resend_verification_email(
     request: Request,
@@ -391,7 +885,51 @@ async def resend_verification_email(
     }
 
 
-@router.patch("/me", response_model=UserSchema)
+@router.patch(
+    "/me",
+    response_model=UserSchema,
+    summary="Update user profile",
+    description="""
+Update current user's profile information and preferences.
+
+Can update: email, full_name, password, email_scan_notifications.
+""",
+    response_description="User profile updated successfully",
+    responses={
+        200: {
+            "description": "Profile updated successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": "123e4567-e89b-12d3-a456-426614174000",
+                        "email": "newemail@example.com",
+                        "full_name": "John Smith",
+                        "email_scan_notifications": False,
+                        "is_active": True,
+                        "email_verified": True,
+                        "updated_at": "2024-01-15T12:00:00Z"
+                    }
+                }
+            }
+        },
+        400: {
+            "description": "Email already taken",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Email already registered"}
+                }
+            }
+        },
+        401: {
+            "description": "Authentication required",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Could not validate credentials"}
+                }
+            }
+        }
+    }
+)
 async def update_current_user(
     user_update: UserUpdate,
     current_user: Annotated[User, Depends(get_current_active_user)],
@@ -433,7 +971,36 @@ async def update_current_user(
     return updated_user
 
 
-@router.post("/forgot-password")
+@router.post(
+    "/forgot-password",
+    summary="Request password reset",
+    description="""
+Request a password reset email with reset token.
+
+**Security**: Always returns success to prevent email enumeration attacks, even if email doesn't exist.
+
+**Rate Limited**: 5 requests/minute to prevent abuse.
+""",
+    response_description="Password reset email sent (if email exists)",
+    responses={
+        200: {
+            "description": "Password reset request processed",
+            "content": {
+                "application/json": {
+                    "example": {"message": "If an account with this email exists, a password reset link has been sent."}
+                }
+            }
+        },
+        429: {
+            "description": "Rate limit exceeded",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Rate limit exceeded: 5 per 1 minute"}
+                }
+            }
+        }
+    }
+)
 @auth_register_limit  # Same rate limit as register to prevent abuse
 async def forgot_password(
     request: Request,
@@ -492,7 +1059,50 @@ async def forgot_password(
     }
 
 
-@router.post("/reset-password")
+@router.post(
+    "/reset-password",
+    summary="Reset password with token",
+    description="""
+Reset password using the token received via email.
+
+Users receive this token after requesting password reset via `/forgot-password`.
+""",
+    response_description="Password reset successfully",
+    responses={
+        200: {
+            "description": "Password reset successfully",
+            "content": {
+                "application/json": {
+                    "example": {"message": "Password reset successfully. You can now login with your new password."}
+                }
+            }
+        },
+        400: {
+            "description": "Invalid or expired token",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Invalid or expired password reset token"}
+                }
+            }
+        },
+        422: {
+            "description": "Validation error (e.g., password too short)",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": [
+                            {
+                                "type": "string_too_short",
+                                "loc": ["body", "new_password"],
+                                "msg": "String should have at least 8 characters"
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+    }
+)
 async def reset_password(
     reset_request: ResetPasswordRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -532,7 +1142,60 @@ async def reset_password(
     }
 
 
-@router.post("/change-password")
+@router.post(
+    "/change-password",
+    summary="Change password (authenticated)",
+    description="""
+Change password for currently authenticated user.
+
+**Requires**: Current password for verification before changing to new password.
+
+**Authentication**: Requires valid access token.
+""",
+    response_description="Password changed successfully",
+    responses={
+        200: {
+            "description": "Password changed successfully",
+            "content": {
+                "application/json": {
+                    "example": {"message": "Password changed successfully."}
+                }
+            }
+        },
+        400: {
+            "description": "Current password is incorrect",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Current password is incorrect"}
+                }
+            }
+        },
+        401: {
+            "description": "Authentication required",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Could not validate credentials"}
+                }
+            }
+        },
+        422: {
+            "description": "Validation error (e.g., password too short)",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": [
+                            {
+                                "type": "string_too_short",
+                                "loc": ["body", "new_password"],
+                                "msg": "String should have at least 8 characters"
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+    }
+)
 async def change_password(
     change_request: PasswordChangeRequest,
     current_user: Annotated[User, Depends(get_current_active_user)],
