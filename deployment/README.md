@@ -23,17 +23,20 @@ Complete guide for deploying CloudWaste to production using Docker + GitHub Acti
 | File | Purpose |
 |------|---------|
 | `docker-compose.prod.yml` | Production Docker stack |
+| `docker-compose.staging.yml` | Local staging environment |
 | `nginx.conf` | Reverse proxy + SSL configuration |
 | `zero-downtime-deploy.sh` | **Main deployment script** (Blue-Green + rollback) |
+| `pre-deploy-check.sh` | Environment validation before deployment |
 | `setup-server.sh` | Initial VPS setup (run once) |
 | `sync-sentry-env.sh` | Sentry variables synchronization |
+| `smoke-tests.sh` | Post-deployment verification tests |
+| `test-staging.sh` | Local staging tests |
 | `diagnose.sh` | System health diagnostics |
-| `debug-last-deployment.sh` | Deployment debugging |
 | `backup-full.sh` | Full system backup (DB + volumes + config) |
 | `restore-full.sh` | Interactive restore utility |
-| `backup-db.sh` | Legacy database-only backup |
 | `setup-backup-cron.sh` | Configure automated daily backups |
-| `activate-user.sh` | User management utilities |
+| `activate-user.sh` | Emergency user activation |
+| `fix-alembic-version.sh` | Fix migration ghost revision errors |
 
 ---
 
@@ -519,6 +522,36 @@ This script checks:
 - ✅ Nginx configuration
 - ✅ SSL certificates
 - ✅ Disk space
+
+### Issue: Alembic Migration "Ghost Revision" Error
+
+**Symptom:**
+```
+ERROR: Can't locate revision identified by '004_payment_reminders'
+```
+
+**Cause:** The database references a migration file that was deleted from the codebase.
+
+**Quick Fix:**
+```bash
+bash deployment/fix-alembic-version.sh
+```
+
+**Manual Fix (if script fails):**
+```bash
+# Check current version
+docker compose -f deployment/docker-compose.prod.yml exec postgres \
+  psql -U cloudwaste -d cloudwaste -c "SELECT * FROM alembic_version;"
+
+# Update to correct version (replace with actual HEAD revision)
+docker compose -f deployment/docker-compose.prod.yml exec postgres \
+  psql -U cloudwaste -d cloudwaste -c "UPDATE alembic_version SET version_num = 'CORRECT_HEAD_REVISION';"
+
+# Apply pending migrations
+docker compose -f deployment/docker-compose.prod.yml run --rm backend alembic upgrade head
+```
+
+**Prevention:** Never delete migration files after applying them to production.
 
 ---
 
