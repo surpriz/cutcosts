@@ -37,35 +37,27 @@ export default function LegalNoticePage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
               <p className="text-sm text-gray-600 mb-1">Company Name</p>
+              <p className="font-semibold text-gray-900">JAAP v2 SASU</p>
+            </div>
+            <div>
+              <p className="text-sm text-gray-600 mb-1">Trade Name</p>
               <p className="font-semibold text-gray-900">CutCosts</p>
             </div>
             <div>
               <p className="text-sm text-gray-600 mb-1">Legal Form</p>
-              <p className="font-semibold text-gray-900">[SAS / SARL / EURL / Other]</p>
+              <p className="font-semibold text-gray-900">SASU (Société par Actions Simplifiée Unipersonnelle)</p>
             </div>
             <div>
-              <p className="text-sm text-gray-600 mb-1">Share Capital</p>
-              <p className="font-semibold text-gray-900">[AMOUNT] EUR</p>
-            </div>
-            <div>
-              <p className="text-sm text-gray-600 mb-1">Registration Number (SIRET)</p>
-              <p className="font-semibold text-gray-900 font-mono">[XXX XXX XXX XXXXX]</p>
-            </div>
-            <div>
-              <p className="text-sm text-gray-600 mb-1">VAT Number (TVA Intracommunautaire)</p>
-              <p className="font-semibold text-gray-900 font-mono">[FR XX XXX XXX XXX]</p>
-            </div>
-            <div>
-              <p className="text-sm text-gray-600 mb-1">APE/NAF Code</p>
-              <p className="font-semibold text-gray-900 font-mono">[XXXX X]</p>
+              <p className="text-sm text-gray-600 mb-1">RCS Registration</p>
+              <p className="font-semibold text-gray-900 font-mono">945 292 795 R.C.S. Romans</p>
             </div>
           </div>
 
           <div className="mt-6 pt-6 border-t border-blue-200">
             <p className="text-sm text-gray-600 mb-1">Registered Address</p>
-            <p className="font-semibold text-gray-900">[STREET ADDRESS]</p>
-            <p className="font-semibold text-gray-900">[POSTAL CODE] [CITY]</p>
-            <p className="font-semibold text-gray-900">[COUNTRY]</p>
+            <p className="font-semibold text-gray-900">155 Chemin des Ecureuils</p>
+            <p className="font-semibold text-gray-900">26450 Charols</p>
+            <p className="font-semibold text-gray-900">France</p>
           </div>
 
           <div className="mt-6 pt-6 border-t border-blue-200">
@@ -94,10 +86,10 @@ export default function LegalNoticePage() {
         </h2>
         <div className="not-prose bg-gray-50 border border-gray-200 rounded-lg p-6">
           <p className="text-gray-900">
-            <strong>Name:</strong> [FULL NAME OF CEO/DIRECTOR]
+            <strong>Name:</strong> Jérôme LAVAL
           </p>
           <p className="text-gray-900 mt-2">
-            <strong>Position:</strong> [CEO / Managing Director / President]
+            <strong>Position:</strong> President (Président)
           </p>
           <p className="text-gray-600 text-sm mt-4">
             The Publication Director is responsible for the content published on cutcosts.tech in accordance with
@@ -114,29 +106,26 @@ export default function LegalNoticePage() {
         </h2>
         <div className="not-prose bg-gray-50 border border-gray-200 rounded-lg p-6">
           <p className="text-gray-900">
-            <strong>Host Name:</strong> [HOSTING PROVIDER NAME]
+            <strong>Host Name:</strong> Database Mart LLC
           </p>
           <p className="text-gray-900 mt-2">
             <strong>Address:</strong>
           </p>
-          <p className="text-gray-700 ml-4">[HOSTING PROVIDER ADDRESS]</p>
-          <p className="text-gray-700 ml-4">[POSTAL CODE] [CITY]</p>
-          <p className="text-gray-700 ml-4">[COUNTRY]</p>
+          <p className="text-gray-700 ml-4">257 Westwood Dr</p>
+          <p className="text-gray-700 ml-4">League City, TX 77573</p>
+          <p className="text-gray-700 ml-4">United States</p>
           <p className="text-gray-900 mt-4">
             <strong>Contact:</strong>{" "}
-            <a href="[HOSTING_PROVIDER_WEBSITE]" className="text-blue-600 hover:underline">
-              [HOSTING_PROVIDER_WEBSITE]
+            <a href="https://www.yourserver.se" className="text-blue-600 hover:underline">
+              https://www.yourserver.se
             </a>
-          </p>
-          <p className="text-gray-900 mt-2">
-            <strong>Phone:</strong> [HOSTING PROVIDER PHONE]
           </p>
         </div>
 
         <div className="not-prose bg-blue-50 border border-blue-200 rounded-lg p-4 mt-4">
           <p className="text-blue-900 text-sm">
             <strong>Server Location:</strong> The CutCosts application is hosted on servers located in{" "}
-            <strong>[EU/France/Your Location]</strong>, ensuring compliance with GDPR data residency requirements.
+            <strong>the United States</strong>. Data transfers are conducted in compliance with GDPR requirements.
           </p>
         </div>
       </section>
@@ -197,11 +186,11 @@ export default function LegalNoticePage() {
       <section className="mb-12">
         <h2 className="text-2xl font-bold text-gray-900 mb-4">6. Applicable Law and Jurisdiction</h2>
         <p>
-          This website and its content are governed by <strong>[French law / Your country's law]</strong>.
+          This website and its content are governed by <strong>French law</strong>.
         </p>
         <p className="mt-4">
           In the event of a dispute, and after an amicable resolution has failed, the courts of{" "}
-          <strong>[Your jurisdiction]</strong> shall have exclusive jurisdiction.
+          <strong>Valence (Drôme, France)</strong> shall have exclusive jurisdiction.
         </p>
         <div className="not-prose bg-yellow-50 border border-yellow-200 rounded-lg p-4 mt-4">
           <p className="text-yellow-900 text-sm">
@@ -354,7 +343,7 @@ export default function LegalNoticePage() {
             </a>
           </p>
           <p className="text-gray-700 mt-4">
-            Address: <span className="font-mono">[YOUR COMPANY ADDRESS]</span>
+            Address: <span className="font-mono">155 Chemin des Ecureuils, 26450 Charols, France</span>
           </p>
         </div>
       </section>

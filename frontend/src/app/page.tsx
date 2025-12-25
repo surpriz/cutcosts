@@ -215,7 +215,14 @@ export default function Home() {
   );
 }
 
-function FeatureCard({ icon: Icon, title, description, gradient }: any) {
+interface FeatureCardProps {
+  icon: React.ComponentType<{ className?: string }>;
+  title: string;
+  description: string;
+  gradient: string;
+}
+
+function FeatureCard({ icon: Icon, title, description, gradient }: FeatureCardProps) {
   return (
     <div className="group relative rounded-2xl border border-gray-200 bg-white p-8 text-center transition-all hover:border-transparent hover:shadow-2xl hover:-translate-y-2">
       <div className={`absolute inset-0 rounded-2xl bg-gradient-to-br ${gradient} opacity-0 group-hover:opacity-100 transition-opacity`}></div>

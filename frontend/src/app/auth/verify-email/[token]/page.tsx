@@ -49,10 +49,10 @@ export default function VerifyEmailTokenPage() {
                 </div>
               </div>
               <h1 className="text-2xl font-bold text-white mb-2">
-                Vérification en cours...
+                Verifying...
               </h1>
               <p className="text-gray-400">
-                Veuillez patienter pendant que nous vérifions votre email.
+                Please wait while we verify your email.
               </p>
             </div>
           )}
@@ -66,21 +66,21 @@ export default function VerifyEmailTokenPage() {
                 </div>
               </div>
               <h1 className="text-2xl font-bold text-white mb-2">
-                🎉 Email vérifié !
+                🎉 Email verified!
               </h1>
               <p className="text-gray-400 mb-6">
                 {message}
               </p>
               <div className="bg-green-900/20 border border-green-800/30 rounded-lg p-4 mb-6">
                 <p className="text-sm text-green-200">
-                  ✅ Votre compte est maintenant actif. Vous allez être redirigé vers la page de connexion...
+                  ✅ Your account is now active. You will be redirected to the login page...
                 </p>
               </div>
               <Link
                 href="/auth/login"
                 className="inline-block bg-green-600 hover:bg-green-700 text-white py-3 px-6 rounded-lg font-medium transition-colors"
               >
-                Se connecter maintenant
+                Sign in now
               </Link>
             </div>
           )}
@@ -94,19 +94,19 @@ export default function VerifyEmailTokenPage() {
                 </div>
               </div>
               <h1 className="text-2xl font-bold text-white mb-2">
-                ❌ Erreur de vérification
+                ❌ Verification error
               </h1>
               <p className="text-gray-400 mb-6">
                 {message}
               </p>
               <div className="bg-red-900/20 border border-red-800/30 rounded-lg p-4 mb-6">
                 <p className="text-sm text-red-200 mb-2">
-                  <strong>Raisons possibles :</strong>
+                  <strong>Possible reasons:</strong>
                 </p>
                 <ul className="text-sm text-red-300 text-left pl-6 list-disc space-y-1">
-                  <li>Le lien a expiré (7 jours maximum)</li>
-                  <li>Le lien a déjà été utilisé</li>
-                  <li>Le lien est invalide</li>
+                  <li>The link has expired (7 days maximum)</li>
+                  <li>The link has already been used</li>
+                  <li>The link is invalid</li>
                 </ul>
               </div>
               <div className="space-y-3">
@@ -114,13 +114,13 @@ export default function VerifyEmailTokenPage() {
                   href="/auth/register"
                   className="block w-full bg-blue-600 hover:bg-blue-700 text-white py-3 px-4 rounded-lg font-medium transition-colors"
                 >
-                  Créer un nouveau compte
+                  Create a new account
                 </Link>
                 <Link
                   href="/auth/login"
                   className="block w-full bg-gray-700 hover:bg-gray-600 text-white py-3 px-4 rounded-lg font-medium transition-colors"
                 >
-                  Retour à la connexion
+                  Back to login
                 </Link>
               </div>
             </div>

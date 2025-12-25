@@ -46,12 +46,12 @@ export default function Error({ error, reset }: ErrorProps) {
 
         {/* Title */}
         <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">
-          Oups ! Une erreur est survenue 🔥
+          Oops! Something went wrong 🔥
         </h2>
 
         {/* Description */}
         <p className="text-lg md:text-xl text-white/90 mb-4 max-w-md mx-auto">
-          Nos serveurs ont rencontré un problème inattendu.
+          Our servers encountered an unexpected problem.
         </p>
 
         {/* Error message (development only) */}
@@ -75,14 +75,14 @@ export default function Error({ error, reset }: ErrorProps) {
             className="group inline-flex items-center gap-3 rounded-xl bg-white px-8 py-4 text-lg font-bold text-red-600 transition-all hover:scale-105 hover:shadow-2xl shadow-xl"
           >
             <RefreshCw className="h-5 w-5 group-hover:rotate-180 transition-transform duration-500" />
-            Réessayer
+            Try again
           </button>
           <a
             href="/"
             className="inline-flex items-center gap-3 rounded-xl border-2 border-white/30 bg-white/10 backdrop-blur-sm px-8 py-4 text-lg font-semibold text-white transition-all hover:bg-white/20 hover:border-white/50"
           >
             <Home className="h-5 w-5" />
-            Retour à l'accueil
+            Back to home
           </a>
         </div>
 
@@ -102,7 +102,7 @@ export default function Error({ error, reset }: ErrorProps) {
             className="inline-flex items-center gap-2 text-white/80 hover:text-white transition-colors text-sm"
           >
             <Bug className="h-4 w-4" />
-            Signaler ce problème
+            Report this issue
           </button>
         </div>
       </div>
