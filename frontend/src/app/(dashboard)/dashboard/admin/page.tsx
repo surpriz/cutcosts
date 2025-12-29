@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import { adminAPI } from "@/lib/api";
 import { useDialog } from "@/hooks/useDialog";
 import type { User, AdminStats, PricingStats, MLDataStats, MLExportResponse, SESMetrics, SESIdentityMetrics } from "@/types";
-import { Shield, Users, UserCheck, UserX, Crown, Ban, CheckCircle, DollarSign, TrendingUp, Database, Download, Mail, AlertTriangle, CheckCircle2, CreditCard, Zap, Sparkles } from "lucide-react";
+import { Shield, Users, UserCheck, UserX, Crown, Ban, CheckCircle, DollarSign, TrendingUp, Database, Download, Mail, AlertTriangle, CheckCircle2, CreditCard, Zap, Sparkles, Gift } from "lucide-react";
+import { BonusScansDialog } from "@/components/admin/BonusScansDialog";
 
 export default function AdminPage() {
   const router = useRouter();
@@ -21,6 +22,8 @@ export default function AdminPage() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [exportLoading, setExportLoading] = useState(false);
   const [exportSuccess, setExportSuccess] = useState<string | null>(null);
+  const [bonusScanUser, setBonusScanUser] = useState<User | null>(null);
+  const [bonusDialogOpen, setBonusDialogOpen] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -132,6 +135,30 @@ export default function AdminPage() {
       month: "short",
       day: "numeric",
     });
+  };
+
+  const handleAddBonusScans = async (userId: string, bonusScans: number) => {
+    await adminAPI.addBonusScans(userId, bonusScans);
+    await loadData();
+  };
+
+  const openBonusDialog = (user: User) => {
+    setBonusScanUser(user);
+    setBonusDialogOpen(true);
+  };
+
+  const getPlanBadge = (planName: string) => {
+    const badges: Record<string, { bg: string; text: string; label: string }> = {
+      free: { bg: "bg-gray-100", text: "text-gray-700", label: "Free" },
+      pro: { bg: "bg-blue-100", text: "text-blue-700", label: "Pro" },
+      enterprise: { bg: "bg-purple-100", text: "text-purple-700", label: "Enterprise" },
+    };
+    const badge = badges[planName] || badges.free;
+    return (
+      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${badge.bg} ${badge.text}`}>
+        {badge.label}
+      </span>
+    );
   };
 
   if (loading) {
@@ -721,6 +748,12 @@ export default function AdminPage() {
                     Role
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Plan
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Scan Usage
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Actions
                   </th>
                 </tr>
@@ -777,6 +810,25 @@ export default function AdminPage() {
                         </span>
                       )}
                     </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      {getPlanBadge(user.subscription?.plan?.name || "free")}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      {user.subscription?.plan?.max_scans_per_month === null ? (
+                        <span className="text-sm text-purple-600 font-medium">Unlimited</span>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm text-gray-900">
+                            {user.subscription?.scans_used_this_month || 0} / {user.subscription?.plan?.max_scans_per_month || 5}
+                          </span>
+                          {(user.subscription?.bonus_scans_this_month || 0) > 0 && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700">
+                              +{user.subscription?.bonus_scans_this_month} bonus
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
                       <button
                         onClick={() => handleToggleActive(user.id)}
@@ -815,6 +867,19 @@ export default function AdminPage() {
                       >
                         {actionLoading === user.id ? "Loading..." : "Delete"}
                       </button>
+                      {user.subscription?.plan?.max_scans_per_month !== null && (
+                        <>
+                          <span className="text-gray-300">|</span>
+                          <button
+                            onClick={() => openBonusDialog(user)}
+                            disabled={actionLoading === user.id}
+                            className="text-purple-600 hover:text-purple-900 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1"
+                          >
+                            <Gift className="h-3 w-3" />
+                            Bonus
+                          </button>
+                        </>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -830,6 +895,17 @@ export default function AdminPage() {
           )}
         </div>
       </div>
+
+      {/* Bonus Scans Dialog */}
+      <BonusScansDialog
+        isOpen={bonusDialogOpen}
+        onClose={() => {
+          setBonusDialogOpen(false);
+          setBonusScanUser(null);
+        }}
+        user={bonusScanUser}
+        onSubmit={handleAddBonusScans}
+      />
     </div>
   );
 }

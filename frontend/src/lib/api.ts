@@ -563,6 +563,19 @@ export const adminAPI = {
     });
   },
 
+  async addBonusScans(
+    userId: string,
+    bonusScans: number
+  ): Promise<import("@/types/subscription").AddBonusScansResponse> {
+    return fetchAPI<import("@/types/subscription").AddBonusScansResponse>(
+      `/api/v1/admin/users/${userId}/bonus-scans`,
+      {
+        method: "POST",
+        body: JSON.stringify({ bonus_scans: bonusScans }),
+      }
+    );
+  },
+
   // Pricing management
   async getPricingStats(): Promise<import("@/types").PricingStats> {
     return fetchAPI<import("@/types").PricingStats>("/api/v1/admin/pricing/stats");

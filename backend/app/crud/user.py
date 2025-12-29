@@ -6,10 +6,12 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.security import get_password_hash, verify_password
 from app.models.user import User
+from app.models.user_subscription import UserSubscription
 from app.schemas.user import UserCreate, UserUpdate
 
 
@@ -166,6 +168,36 @@ async def get_all_users(
     """
     result = await db.execute(
         select(User).offset(skip).limit(limit).order_by(User.created_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+async def get_all_users_with_subscriptions(
+    db: AsyncSession,
+    skip: int = 0,
+    limit: int = 100,
+) -> list[User]:
+    """
+    Get all users with their subscriptions (admin only).
+
+    Eagerly loads subscription and plan relationships for admin views.
+
+    Args:
+        db: Database session
+        skip: Number of records to skip
+        limit: Maximum number of records to return
+
+    Returns:
+        List of user objects with subscription relationship loaded
+    """
+    result = await db.execute(
+        select(User)
+        .options(
+            selectinload(User.subscription).selectinload(UserSubscription.plan)
+        )
+        .offset(skip)
+        .limit(limit)
+        .order_by(User.created_at.desc())
     )
     return list(result.scalars().all())
 

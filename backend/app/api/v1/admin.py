@@ -16,9 +16,11 @@ from app.models.user import User
 from app.models.ml_training_data import MLTrainingData
 from app.models.user_action_pattern import UserActionPattern
 from app.models.cost_trend_data import CostTrendData
-from app.schemas.user import User as UserSchema, UserAdminUpdate
+from app.schemas.user import User as UserSchema, UserAdminUpdate, UserWithSubscription
+from app.schemas.subscription import AddBonusScansRequest, AddBonusScansResponse
 from app.schemas.ses_metrics import SESMetrics, SESIdentityMetrics
 from app.services.ses_metrics_service import SESMetricsService
+from app.services.subscription_service import SubscriptionService
 from app.ml.data_pipeline import export_all_ml_datasets
 
 router = APIRouter()
@@ -62,27 +64,27 @@ async def get_admin_stats(
 
 @router.get(
     "/users",
-    response_model=list[UserSchema],
-    summary="Get all users",
+    response_model=list[UserWithSubscription],
+    summary="Get all users with subscription info",
 )
 async def get_all_users(
     db: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(get_current_superuser)],
     skip: int = Query(0, ge=0, description="Number of users to skip"),
     limit: int = Query(100, ge=1, le=500, description="Maximum number of users to return"),
-) -> list[UserSchema]:
+) -> list[UserWithSubscription]:
     """
-    Get all users (superuser only).
+    Get all users with subscription info (superuser only).
 
     Args:
         skip: Number of users to skip (for pagination)
         limit: Maximum number of users to return
 
     Returns:
-        List of all users
+        List of all users with their subscription data
     """
-    users = await user_crud.get_all_users(db, skip=skip, limit=limit)
-    return [UserSchema.model_validate(user) for user in users]
+    users = await user_crud.get_all_users_with_subscriptions(db, skip=skip, limit=limit)
+    return [UserWithSubscription.model_validate(user) for user in users]
 
 
 @router.get(
@@ -253,6 +255,60 @@ async def delete_user(
     await user_crud.delete_user(db, target_user)
 
     return None
+
+
+@router.post(
+    "/users/{user_id}/bonus-scans",
+    response_model=AddBonusScansResponse,
+    summary="Add bonus scans to user subscription",
+)
+async def add_user_bonus_scans(
+    user_id: uuid.UUID,
+    request: AddBonusScansRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_superuser)],
+) -> AddBonusScansResponse:
+    """
+    Add bonus scans to a user's subscription (superuser only).
+
+    Bonus scans are added to the user's monthly limit and reset
+    at the same time as regular scan counters.
+
+    Args:
+        user_id: Target user UUID
+        request: Bonus scans request containing number of scans to add
+
+    Returns:
+        Response with updated bonus scan information
+
+    Raises:
+        HTTPException: If user not found or subscription is unlimited
+    """
+    # Verify target user exists
+    target_user = await user_crud.get_user_by_id(db, user_id)
+    if not target_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+
+    try:
+        subscription_service = SubscriptionService(db)
+        subscription = await subscription_service.add_bonus_scans(
+            user_id, request.bonus_scans
+        )
+
+        return AddBonusScansResponse(
+            user_id=user_id,
+            bonus_scans_added=request.bonus_scans,
+            total_bonus_scans=subscription.bonus_scans_this_month,
+            message=f"Successfully added {request.bonus_scans} bonus scans",
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
 
 
 class MLDataStats(BaseModel):

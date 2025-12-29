@@ -395,14 +395,18 @@ class SubscriptionService:
             or (now - subscription.last_scan_reset_at).days >= 30
         ):
             subscription.scans_used_this_month = 0
+            subscription.bonus_scans_this_month = 0  # Reset bonus scans too
             subscription.last_scan_reset_at = now
             await self.db.commit()
 
+        # Calculate total available scans (base + bonus)
+        total_scans_available = plan.max_scans_per_month + subscription.bonus_scans_this_month
+
         # Check if limit exceeded
-        if subscription.scans_used_this_month >= plan.max_scans_per_month:
+        if subscription.scans_used_this_month >= total_scans_available:
             return (
                 False,
-                f"Monthly scan limit reached ({plan.max_scans_per_month} scans). "
+                f"Monthly scan limit reached ({total_scans_available} scans). "
                 f"Upgrade to {plan.name == 'free' and 'Pro' or 'Enterprise'} for more scans.",
             )
 
@@ -507,3 +511,42 @@ class SubscriptionService:
             )
 
         return True, None
+
+    async def add_bonus_scans(
+        self, user_id: UUID, bonus_scans: int
+    ) -> UserSubscription:
+        """Add bonus scans to user's subscription (admin only).
+
+        Bonus scans are added to the user's monthly limit and reset
+        at the same time as regular scan counters.
+
+        Args:
+            user_id: Target user ID
+            bonus_scans: Number of bonus scans to add
+
+        Returns:
+            Updated UserSubscription
+
+        Raises:
+            ValueError: If subscription not found or is unlimited
+        """
+        subscription = await self.get_user_subscription(user_id)
+        if not subscription:
+            raise ValueError(f"No active subscription found for user {user_id}")
+
+        # Enterprise plans have unlimited scans, bonus doesn't apply
+        if subscription.plan.max_scans_per_month is None:
+            raise ValueError(
+                "Cannot add bonus scans to unlimited (Enterprise) subscription"
+            )
+
+        subscription.bonus_scans_this_month += bonus_scans
+        await self.db.commit()
+        await self.db.refresh(subscription)
+
+        logger.info(
+            f"Added {bonus_scans} bonus scans to user {user_id}, "
+            f"total bonus: {subscription.bonus_scans_this_month}"
+        )
+
+        return subscription

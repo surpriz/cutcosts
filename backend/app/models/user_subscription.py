@@ -72,6 +72,10 @@ class UserSubscription(Base):
         default=0,
         nullable=False,
     )
+    bonus_scans_this_month: Mapped[int] = mapped_column(
+        default=0,
+        nullable=False,
+    )
     last_scan_reset_at: Mapped[datetime | None] = mapped_column(
         nullable=True,
     )

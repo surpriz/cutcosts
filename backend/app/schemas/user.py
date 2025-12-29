@@ -90,3 +90,32 @@ class PasswordChangeRequest(BaseModel):
 
     current_password: str
     new_password: str = Field(..., min_length=8, max_length=100)
+
+
+# Admin schemas with subscription info
+class SubscriptionPlanSummary(BaseModel):
+    """Summary of subscription plan for admin views."""
+
+    name: str
+    display_name: str
+    max_scans_per_month: int | None
+
+    model_config = {"from_attributes": True}
+
+
+class SubscriptionSummary(BaseModel):
+    """Summary of user subscription for admin views."""
+
+    id: uuid.UUID
+    plan: SubscriptionPlanSummary
+    status: str
+    scans_used_this_month: int
+    bonus_scans_this_month: int
+
+    model_config = {"from_attributes": True}
+
+
+class UserWithSubscription(User):
+    """User schema with subscription info for admin views."""
+
+    subscription: SubscriptionSummary | None = None

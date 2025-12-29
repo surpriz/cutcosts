@@ -35,6 +35,7 @@ export interface UserSubscription {
   current_period_end: string | null;
   cancel_at_period_end: boolean;
   scans_used_this_month: number;
+  bonus_scans_this_month: number;
   last_scan_reset_at: string | null;
   created_at: string;
   canceled_at: string | null;
@@ -64,4 +65,16 @@ export interface SubscriptionLimitCheck {
   error_message: string | null;
   current_usage: number | null;
   limit: number | null;
+}
+
+// Admin bonus scans types
+export interface AddBonusScansRequest {
+  bonus_scans: number;
+}
+
+export interface AddBonusScansResponse {
+  user_id: string;
+  bonus_scans_added: number;
+  total_bonus_scans: number;
+  message: string;
 }

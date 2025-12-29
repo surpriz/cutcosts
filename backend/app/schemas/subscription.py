@@ -65,6 +65,9 @@ class UserSubscriptionResponse(BaseModel):
 
     # Usage tracking
     scans_used_this_month: int = Field(..., description="Scans used this month")
+    bonus_scans_this_month: int = Field(
+        default=0, description="Bonus scans granted by admin this month"
+    )
     last_scan_reset_at: Optional[datetime] = Field(
         None, description="Last scan counter reset"
     )
@@ -116,3 +119,23 @@ class SubscriptionLimitCheckResponse(BaseModel):
     error_message: Optional[str] = Field(None, description="Error message if not allowed")
     current_usage: Optional[int] = Field(None, description="Current usage count")
     limit: Optional[int] = Field(None, description="Usage limit (null = unlimited)")
+
+
+class AddBonusScansRequest(BaseModel):
+    """Request to add bonus scans to a user's subscription (admin only)."""
+
+    bonus_scans: int = Field(
+        ...,
+        ge=1,
+        le=100,
+        description="Number of bonus scans to add (1-100)",
+    )
+
+
+class AddBonusScansResponse(BaseModel):
+    """Response after adding bonus scans."""
+
+    user_id: UUID
+    bonus_scans_added: int = Field(..., description="Number of bonus scans added")
+    total_bonus_scans: int = Field(..., description="Total bonus scans for this month")
+    message: str = Field(..., description="Success message")

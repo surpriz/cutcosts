@@ -11,6 +11,20 @@ export interface User {
   is_superuser: boolean;
   email_verified: boolean;
   created_at: string;
+  subscription?: UserSubscriptionSummary | null;
+}
+
+// Subscription summary for admin views
+export interface UserSubscriptionSummary {
+  id: string;
+  plan: {
+    name: string;
+    display_name: string;
+    max_scans_per_month: number | null;
+  };
+  status: string;
+  scans_used_this_month: number;
+  bonus_scans_this_month: number;
 }
 
 export interface LoginRequest {
