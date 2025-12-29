@@ -2,6 +2,7 @@ import { Sparkles, DollarSign, Zap, Shield } from "lucide-react";
 
 interface WelcomeStepProps {
   onNext: () => void;
+  onDismissPermanently?: () => void;
 }
 
 /**
@@ -9,7 +10,7 @@ interface WelcomeStepProps {
  *
  * Introduces CutCosts and its benefits
  */
-export function WelcomeStep({ onNext }: WelcomeStepProps) {
+export function WelcomeStep({ onNext, onDismissPermanently }: WelcomeStepProps) {
   const benefits = [
     {
       icon: DollarSign,
@@ -143,6 +144,15 @@ export function WelcomeStep({ onNext }: WelcomeStepProps) {
       <p className="mt-6 text-sm text-gray-500">
         Takes less than 5 minutes • No credit card required
       </p>
+
+      {onDismissPermanently && (
+        <button
+          onClick={onDismissPermanently}
+          className="mt-4 text-sm text-gray-400 hover:text-gray-600 underline underline-offset-2 transition-colors"
+        >
+          I already know my way around - don't show this anymore
+        </button>
+      )}
     </div>
   );
 }

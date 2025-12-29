@@ -2,9 +2,10 @@
  * Hook for automatic onboarding redirection after login/registration
  */
 
-import { useEffect } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useOnboardingStore } from "@/stores/useOnboardingStore";
+import { preferencesAPI } from "@/lib/api";
 
 /**
  * Auto-redirect to onboarding if not completed
@@ -14,41 +15,58 @@ import { useOnboardingStore } from "@/stores/useOnboardingStore";
  * @example
  * ```tsx
  * function LoginPage() {
- *   const redirectToOnboarding = useOnboardingRedirect();
+ *   const { redirectIfNeeded, isChecking } = useOnboardingRedirect();
  *
  *   const handleLogin = async () => {
  *     await login();
- *     redirectToOnboarding(); // Will redirect if onboarding not done
+ *     await redirectIfNeeded(); // Will redirect if onboarding not done
  *   };
  * }
  * ```
  */
 export function useOnboardingRedirect() {
   const router = useRouter();
-  const { isCompleted, dismissed, accountAdded, firstScanCompleted } = useOnboardingStore();
+  const { isCompleted, dismissed, completeOnboarding } = useOnboardingStore();
+  const [isChecking, setIsChecking] = useState(false);
 
-  const redirectIfNeeded = () => {
-    // Debug log
-    console.log("[useOnboardingRedirect] Checking redirect:", {
-      isCompleted,
-      dismissed,
-      accountAdded,
-      firstScanCompleted,
-    });
+  const redirectIfNeeded = useCallback(async () => {
+    setIsChecking(true);
 
-    // Don't redirect if onboarding is completed or dismissed
-    if (isCompleted || dismissed) {
-      console.log("[useOnboardingRedirect] Redirecting to /dashboard (completed or dismissed)");
-      router.push("/dashboard");
-      return;
+    try {
+      // Fetch fresh status from backend
+      const status = await preferencesAPI.getOnboardingStatus();
+
+      console.log("[useOnboardingRedirect] Backend status:", status);
+
+      // Sync local store with backend state
+      if (!status.should_show_onboarding && !isCompleted && !dismissed) {
+        completeOnboarding();
+      }
+
+      if (!status.should_show_onboarding) {
+        console.log("[useOnboardingRedirect] Redirecting to /dashboard (backend says skip)");
+        router.push("/dashboard");
+      } else {
+        console.log("[useOnboardingRedirect] Redirecting to /onboarding (backend says show)");
+        router.push("/onboarding");
+      }
+    } catch (error) {
+      console.error("[useOnboardingRedirect] Backend check failed, using localStorage:", error);
+
+      // Fallback to localStorage state if backend fails
+      if (isCompleted || dismissed) {
+        console.log("[useOnboardingRedirect] Fallback: Redirecting to /dashboard");
+        router.push("/dashboard");
+      } else {
+        console.log("[useOnboardingRedirect] Fallback: Redirecting to /onboarding");
+        router.push("/onboarding");
+      }
+    } finally {
+      setIsChecking(false);
     }
+  }, [router, isCompleted, dismissed, completeOnboarding]);
 
-    // Redirect to onboarding for first-time users
-    console.log("[useOnboardingRedirect] Redirecting to /onboarding (not completed)");
-    router.push("/onboarding");
-  };
-
-  return redirectIfNeeded;
+  return { redirectIfNeeded, isChecking };
 }
 
 /**
@@ -66,14 +84,9 @@ export function useOnboardingRedirect() {
  * ```
  */
 export function useAutoOnboardingRedirect() {
-  const router = useRouter();
-  const { isCompleted, dismissed } = useOnboardingStore();
+  const { redirectIfNeeded } = useOnboardingRedirect();
 
   useEffect(() => {
-    if (!isCompleted && !dismissed) {
-      router.push("/onboarding");
-    } else {
-      router.push("/dashboard");
-    }
-  }, [isCompleted, dismissed, router]);
+    redirectIfNeeded();
+  }, [redirectIfNeeded]);
 }

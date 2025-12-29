@@ -26,6 +26,9 @@ class UserPreferencesBase(BaseModel):
     data_retention_years: str = Field(
         default="3", description="ML data retention period in years (1, 2, or 3)"
     )
+    onboarding_dismissed: bool = Field(
+        default=False, description="Whether user has permanently dismissed the onboarding wizard"
+    )
 
 
 class UserPreferencesCreate(UserPreferencesBase):
@@ -44,6 +47,7 @@ class UserPreferencesUpdate(BaseModel):
     email_cost_alerts: bool | None = None
     email_marketing: bool | None = None
     data_retention_years: str | None = None
+    onboarding_dismissed: bool | None = None
 
 
 class UserPreferencesResponse(UserPreferencesBase):
@@ -56,3 +60,20 @@ class UserPreferencesResponse(UserPreferencesBase):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class OnboardingStatusResponse(BaseModel):
+    """Schema for onboarding status response."""
+
+    should_show_onboarding: bool = Field(
+        description="Whether the onboarding wizard should be displayed"
+    )
+    has_accounts: bool = Field(
+        description="Whether the user has connected at least one cloud account"
+    )
+    onboarding_dismissed: bool = Field(
+        description="Whether the user has permanently dismissed the onboarding wizard"
+    )
+    account_count: int = Field(
+        description="Number of cloud accounts connected by the user"
+    )

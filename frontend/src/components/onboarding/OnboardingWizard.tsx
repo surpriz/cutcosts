@@ -49,7 +49,7 @@ export function OnboardingWizard() {
   const renderStep = () => {
     switch (currentStep) {
       case OnboardingStep.WELCOME:
-        return <WelcomeStep onNext={handleNext} />;
+        return <WelcomeStep onNext={handleNext} onDismissPermanently={skipOnboardingAndRedirect} />;
 
       case OnboardingStep.ADD_ACCOUNT:
         return (
@@ -68,7 +68,7 @@ export function OnboardingWizard() {
         return <CompletionStep onFinish={finishOnboarding} />;
 
       default:
-        return <WelcomeStep onNext={handleNext} />;
+        return <WelcomeStep onNext={handleNext} onDismissPermanently={skipOnboardingAndRedirect} />;
     }
   };
 

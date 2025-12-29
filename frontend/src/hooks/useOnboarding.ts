@@ -43,9 +43,9 @@ export function useOnboarding() {
     navigateToDashboard();
   };
 
-  // Skip onboarding and go to dashboard
-  const skipOnboardingAndRedirect = () => {
-    store.skipOnboarding();
+  // Skip onboarding and go to dashboard (with backend sync)
+  const skipOnboardingAndRedirect = async () => {
+    await store.skipOnboardingWithBackend();
     navigateToDashboard();
   };
 
@@ -109,6 +109,7 @@ export function useOnboarding() {
     completeStep: store.completeStep,
     completeOnboarding: store.completeOnboarding,
     skipOnboarding: store.skipOnboarding,
+    skipOnboardingWithBackend: store.skipOnboardingWithBackend,
     resetOnboarding: store.resetOnboarding,
     setAccountAdded: store.setAccountAdded,
     setFirstScanCompleted: store.setFirstScanCompleted,

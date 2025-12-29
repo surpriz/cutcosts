@@ -12,6 +12,7 @@ import {
   getPreviousStep,
 } from "@/types/onboarding";
 import { decodeToken } from "@/lib/auth";
+import { preferencesAPI } from "@/lib/api";
 
 interface OnboardingState extends OnboardingProgress {
   // Actions
@@ -21,6 +22,7 @@ interface OnboardingState extends OnboardingProgress {
   completeStep: (step: OnboardingStep) => void;
   completeOnboarding: () => void;
   skipOnboarding: () => void;
+  skipOnboardingWithBackend: () => Promise<void>;
   resetOnboarding: () => void;
   setAccountAdded: (added: boolean) => void;
   setFirstScanCompleted: (completed: boolean) => void;
@@ -138,6 +140,20 @@ export const useOnboardingStore = create<OnboardingState>()(
         set({
           dismissed: true,
         });
+      },
+
+      skipOnboardingWithBackend: async () => {
+        // Update local state immediately for responsive UX
+        set({ dismissed: true });
+
+        // Persist to backend (async, don't block)
+        try {
+          await preferencesAPI.dismissOnboarding();
+          console.log("[useOnboardingStore] Onboarding dismissed synced to backend");
+        } catch (error) {
+          console.error("[useOnboardingStore] Failed to sync onboarding dismissal to backend:", error);
+          // Local state is already updated, so UI works even if backend fails
+        }
       },
 
       resetOnboarding: () => {

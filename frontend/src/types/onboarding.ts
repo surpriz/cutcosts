@@ -27,6 +27,16 @@ export interface OnboardingProgress {
 }
 
 /**
+ * Backend onboarding status response
+ */
+export interface OnboardingStatus {
+  should_show_onboarding: boolean;
+  has_accounts: boolean;
+  onboarding_dismissed: boolean;
+  account_count: number;
+}
+
+/**
  * Checklist item
  */
 export interface ChecklistItem {

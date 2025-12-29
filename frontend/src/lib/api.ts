@@ -409,6 +409,23 @@ export const impactAPI = {
 };
 
 /**
+ * User Preferences API
+ */
+export const preferencesAPI = {
+  async getOnboardingStatus(): Promise<import("@/types/onboarding").OnboardingStatus> {
+    return fetchAPI<import("@/types/onboarding").OnboardingStatus>(
+      "/api/v1/user-preferences/me/onboarding-status"
+    );
+  },
+
+  async dismissOnboarding(): Promise<unknown> {
+    return fetchAPI<unknown>("/api/v1/user-preferences/me/dismiss-onboarding", {
+      method: "POST",
+    });
+  },
+};
+
+/**
  * Chat API (AI Assistant)
  */
 export const chatAPI = {
@@ -677,6 +694,7 @@ const api = {
   ...scansAPI,
   ...resourcesAPI,
   ...impactAPI,
+  ...preferencesAPI,
   ...chatAPI,
   ...adminAPI,
 };

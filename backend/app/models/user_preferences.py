@@ -85,6 +85,13 @@ class UserPreferences(Base):
         nullable=False,
     )  # How long to keep ML data (1, 2, or 3 years)
 
+    # Onboarding preferences
+    onboarding_dismissed: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )  # Whether user has permanently dismissed the onboarding wizard
+
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
         server_default=func.now(),

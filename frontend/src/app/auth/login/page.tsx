@@ -13,7 +13,7 @@ export default function LoginPage() {
   const isLoading = useAuthStore((state) => state.isLoading);
   const error = useAuthStore((state) => state.error);
   const clearError = useAuthStore((state) => state.clearError);
-  const redirectToOnboarding = useOnboardingRedirect();
+  const { redirectIfNeeded } = useOnboardingRedirect();
 
   const [formData, setFormData] = useState({
     username: "",
@@ -28,7 +28,7 @@ export default function LoginPage() {
     try {
       await login(formData);
       // Auto-redirect to onboarding if not completed, otherwise dashboard
-      redirectToOnboarding();
+      await redirectIfNeeded();
     } catch (err) {
       console.error("Login error:", err);
     }

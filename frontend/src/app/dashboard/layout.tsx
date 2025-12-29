@@ -11,6 +11,7 @@ import { useAccountStore } from "@/stores/useAccountStore";
 import { useScanStore } from "@/stores/useScanStore";
 import { useOnboardingStore } from "@/stores/useOnboardingStore";
 import { isAuthenticated } from "@/lib/auth";
+import { preferencesAPI } from "@/lib/api";
 
 export default function DashboardLayout({
   children,
@@ -21,7 +22,7 @@ export default function DashboardLayout({
   const { user, fetchCurrentUser } = useAuthStore();
   const { accounts } = useAccountStore();
   const { scans } = useScanStore();
-  const { isCompleted, dismissed, resetOnboarding } = useOnboardingStore();
+  const { isCompleted, dismissed, resetOnboarding, completeOnboarding } = useOnboardingStore();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   // Debug log
@@ -40,22 +41,41 @@ export default function DashboardLayout({
     }
   }, [user, fetchCurrentUser, router]);
 
-  // Auto-reset onboarding for genuinely new users
-  // This fixes localStorage pollution from previous users
+  // Sync onboarding state with backend
+  // Backend is the source of truth for onboarding status
   useEffect(() => {
-    // Only check when user is loaded and we have accounts/scans data
     if (!user) return;
 
-    const isNewUser = accounts.length === 0 && scans.length === 0;
-    const onboardingMarkedAsDone = isCompleted || dismissed;
+    const syncOnboardingStatus = async () => {
+      try {
+        const status = await preferencesAPI.getOnboardingStatus();
+        console.log("[DashboardLayout] Backend onboarding status:", status);
 
-    // If user is new but onboarding shows as done (from localStorage pollution),
-    // reset it so they see the onboarding banner
-    if (isNewUser && onboardingMarkedAsDone) {
-      console.log("[DashboardLayout] Detected new user with polluted state, resetting onboarding");
-      resetOnboarding();
-    }
-  }, [user, accounts.length, scans.length, isCompleted, dismissed, resetOnboarding]);
+        // Sync local state with backend
+        if (!status.should_show_onboarding && !isCompleted && !dismissed) {
+          // Backend says skip onboarding - update local state
+          console.log("[DashboardLayout] Backend says skip onboarding, updating local state");
+          completeOnboarding();
+        } else if (status.should_show_onboarding && (isCompleted || dismissed)) {
+          // Backend says show onboarding but local says skip - trust backend
+          console.log("[DashboardLayout] Backend says show onboarding, resetting local state");
+          resetOnboarding();
+        }
+      } catch (error) {
+        console.error("[DashboardLayout] Failed to fetch onboarding status:", error);
+        // Fallback to local logic if backend fails
+        const isNewUser = accounts.length === 0 && scans.length === 0;
+        const onboardingMarkedAsDone = isCompleted || dismissed;
+
+        if (isNewUser && onboardingMarkedAsDone) {
+          console.log("[DashboardLayout] Fallback: Detected new user with polluted state, resetting onboarding");
+          resetOnboarding();
+        }
+      }
+    };
+
+    syncOnboardingStatus();
+  }, [user, accounts.length, scans.length, isCompleted, dismissed, resetOnboarding, completeOnboarding]);
 
   // Close mobile menu on route change
   useEffect(() => {
