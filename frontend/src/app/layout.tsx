@@ -1,12 +1,24 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Inter, Instrument_Sans, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { CookieBanner } from "@/components/legal/CookieBanner";
 import { StructuredData } from "@/components/seo/StructuredData";
 import { SentryProvider } from "@/components/providers/SentryProvider";
 import { DialogProvider } from "@/components/ui/DialogProvider";
 
-const inter = Inter({ subsets: ["latin"] });
+const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
+
+const instrumentSans = Instrument_Sans({
+  subsets: ["latin"],
+  variable: "--font-instrument",
+  display: "swap",
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-mono",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://cutcosts.tech"),
@@ -105,7 +117,7 @@ export default function RootLayout({
       <head>
         <StructuredData />
       </head>
-      <body className={inter.className}>
+      <body className={`${instrumentSans.variable} ${jetbrainsMono.variable} ${inter.variable} font-sans`}>
         <SentryProvider>
           {children}
           <CookieBanner />
