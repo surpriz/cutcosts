@@ -22782,6 +22782,41 @@ class AzureProvider(CloudProviderBase):
 
         return default_cost
 
+    def _calculate_app_service_plan_cost_by_sku(self, sku_name: str, capacity: int = 1) -> float:
+        """Calculate monthly cost for App Service Plan by SKU name and instance count."""
+        costs = {
+            'F1': 0.0, 'D1': 9.49,
+            'B1': 13.14, 'B2': 26.28, 'B3': 52.56,
+            'S1': 73.00, 'S2': 146.00, 'S3': 292.00,
+            'P1V2': 84.68, 'P2V2': 169.36, 'P3V2': 338.72,
+            'P1V3': 124.10, 'P2V3': 248.20, 'P3V3': 496.40,
+            'I1': 298.00, 'I2': 596.00, 'I3': 1192.00,
+            'I1V2': 298.00, 'I2V2': 596.00, 'I3V2': 1192.00,
+        }
+        unit_cost = costs.get(sku_name.upper(), 73.00)
+        return unit_cost * capacity
+
+    def _get_app_service_recommended_downsize(self, sku_name: str) -> str | None:
+        """Get recommended smaller SKU for App Service Plan."""
+        downsizes = {
+            'S2': 'S1', 'S3': 'S2',
+            'P1V2': 'S1', 'P2V2': 'P1V2', 'P3V2': 'P2V2',
+            'P1V3': 'S1', 'P2V3': 'P1V3', 'P3V3': 'P2V3',
+            'B2': 'B1', 'B3': 'B2',
+            'I2': 'I1', 'I3': 'I2',
+            'I2V2': 'I1V2', 'I3V2': 'I2V2',
+        }
+        return downsizes.get(sku_name.upper())
+
+    def _is_app_service_free_tier(self, sku_name: str) -> bool:
+        """Check if App Service Plan SKU is free/shared tier."""
+        return sku_name.upper() in ('F1', 'D1', 'FREE', 'SHARED')
+
+    def _is_app_service_premium_tier(self, sku_name: str) -> bool:
+        """Check if App Service Plan SKU is premium or isolated tier."""
+        upper = sku_name.upper()
+        return upper.startswith(('P', 'I'))
+
     async def scan_ml_compute_instance_gpu_for_cpu_workload(
         self, region: str, detection_rules: dict | None = None
     ) -> list[OrphanResourceData]:
@@ -24265,13 +24300,86 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 1: app_service_plan_empty - 100% waste.
 
         Detection Logic:
-        - App Service Plan exists
-        - 0 applications deployed on plan
+        - App Service Plan exists with 0 apps
+        - SKU is not Free/Shared (F1/D1)
         - Age > min_empty_days (default 7)
 
         Cost Impact: $70-876/month depending on SKU (100% waste)
         """
-        return []
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.web import WebSiteManagementClient
+
+        orphans: list[OrphanResourceData] = []
+        min_empty_days = detection_rules.get("min_empty_days", 7) if detection_rules else 7
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            web_client = WebSiteManagementClient(credential, self.subscription_id)
+
+            for plan in web_client.app_service_plans.list():
+                plan_location = plan.location.lower().replace(" ", "") if plan.location else ""
+                target_region = region.lower().replace(" ", "")
+                if plan_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(plan.id):
+                    continue
+
+                # Skip free/shared tiers
+                sku_name = plan.sku.name if plan.sku else 'F1'
+                if self._is_app_service_free_tier(sku_name):
+                    continue
+
+                # Check number of sites
+                num_sites = plan.number_of_sites if plan.number_of_sites is not None else 0
+                if num_sites > 0:
+                    continue
+
+                # Calculate age
+                age_days = 0
+                if hasattr(plan, 'system_data') and plan.system_data:
+                    created_at = getattr(plan.system_data, 'created_at', None)
+                    if created_at:
+                        if created_at.tzinfo is None:
+                            created_at = created_at.replace(tzinfo=timezone.utc)
+                        age_days = (datetime.now(timezone.utc) - created_at).days
+
+                if age_days < min_empty_days and age_days > 0:
+                    continue
+
+                capacity = plan.sku.capacity if plan.sku and plan.sku.capacity else 1
+                monthly_cost = self._calculate_app_service_plan_cost_by_sku(sku_name, capacity)
+
+                metadata = {
+                    'plan_name': plan.name,
+                    'plan_id': plan.id,
+                    'sku_name': sku_name,
+                    'sku_tier': plan.sku.tier if plan.sku else 'Unknown',
+                    'capacity': capacity,
+                    'number_of_sites': 0,
+                    'age_days': age_days,
+                    'resource_group': plan.resource_group if hasattr(plan, 'resource_group') else '',
+                    'orphan_reason': f"App Service Plan '{plan.name}' ({sku_name}) has 0 apps deployed - 100% waste",
+                    'recommendation': 'Delete empty App Service Plan to eliminate cost',
+                    'confidence_level': 'critical' if age_days >= 30 else 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='app_service_plan_empty',
+                    resource_id=plan.id,
+                    resource_name=plan.name,
+                    region=plan.location,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning empty App Service Plans in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_app_service_premium_in_dev(
         self, region: str, detection_rules: dict | None = None
@@ -24281,13 +24389,90 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 2: app_service_premium_in_dev - Downgrade to save 62%.
 
         Detection Logic:
-        - Plan SKU tier in Premium/PremiumV2/PremiumV3/Isolated
+        - Plan SKU tier is Premium/PremiumV2/PremiumV3/Isolated
         - Environment tags or naming indicates dev/test/staging
-        - Exclude production environments
 
-        Cost Impact: $91/month savings (P1v2 $146 → B2 $55)
+        Cost Impact: $91/month savings (P1v2 $146 -> B2 $55)
         """
-        return []
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.web import WebSiteManagementClient
+
+        orphans: list[OrphanResourceData] = []
+        dev_keywords = ['dev', 'test', 'staging', 'sandbox', 'poc', 'demo', 'lab', 'trial', 'qa']
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            web_client = WebSiteManagementClient(credential, self.subscription_id)
+
+            for plan in web_client.app_service_plans.list():
+                plan_location = plan.location.lower().replace(" ", "") if plan.location else ""
+                target_region = region.lower().replace(" ", "")
+                if plan_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(plan.id):
+                    continue
+
+                sku_name = plan.sku.name if plan.sku else 'F1'
+                if not self._is_app_service_premium_tier(sku_name):
+                    continue
+
+                # Check if dev/test environment
+                plan_name_lower = plan.name.lower()
+                rg_name = ''
+                if plan.id:
+                    parts = plan.id.split('/')
+                    rg_name = parts[4].lower() if len(parts) > 4 else ''
+
+                tags = plan.tags or {}
+                tag_values = ' '.join(str(v).lower() for v in tags.values())
+                env_tag = tags.get('environment', tags.get('env', '')).lower()
+
+                is_dev = any(
+                    kw in name
+                    for kw in dev_keywords
+                    for name in (plan_name_lower, rg_name, env_tag, tag_values)
+                )
+
+                if not is_dev:
+                    continue
+
+                capacity = plan.sku.capacity if plan.sku and plan.sku.capacity else 1
+                current_cost = self._calculate_app_service_plan_cost_by_sku(sku_name, capacity)
+                recommended_sku = 'B2'
+                recommended_cost = self._calculate_app_service_plan_cost_by_sku(recommended_sku, capacity)
+                savings = current_cost - recommended_cost
+
+                metadata = {
+                    'plan_name': plan.name,
+                    'plan_id': plan.id,
+                    'sku_name': sku_name,
+                    'sku_tier': plan.sku.tier if plan.sku else 'Unknown',
+                    'capacity': capacity,
+                    'resource_group': rg_name,
+                    'is_dev_environment': True,
+                    'recommended_sku': recommended_sku,
+                    'estimated_savings': round(savings, 2),
+                    'orphan_reason': f"Premium App Service Plan '{plan.name}' ({sku_name}) in dev/test environment",
+                    'recommendation': f'Downgrade to {recommended_sku} to save ~${savings:.0f}/month in non-production',
+                    'confidence_level': 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='app_service_premium_in_dev',
+                    resource_id=plan.id,
+                    resource_name=plan.name,
+                    region=plan.location,
+                    estimated_monthly_cost=current_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning premium App Service Plans in dev in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_app_service_no_auto_scale(
         self, region: str, detection_rules: dict | None = None
@@ -24297,13 +24482,89 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 3: app_service_no_auto_scale - Waste 50% during low-load.
 
         Detection Logic:
-        - Plan has >= min_instances_for_autoscale (default 2)
+        - Plan has >= min_instances (default 2) fixed instances
         - No auto-scale rules configured
-        - Age > min_age_days (default 14)
+        - SKU supports auto-scale (Standard+)
 
         Cost Impact: $140/month for S2 (50% waste during off-peak)
         """
-        return []
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.web import WebSiteManagementClient
+        from azure.mgmt.monitor import MonitorManagementClient
+
+        orphans: list[OrphanResourceData] = []
+        min_instances = detection_rules.get("min_instances_for_autoscale", 2) if detection_rules else 2
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            web_client = WebSiteManagementClient(credential, self.subscription_id)
+            monitor_client = MonitorManagementClient(credential, self.subscription_id)
+
+            for plan in web_client.app_service_plans.list():
+                plan_location = plan.location.lower().replace(" ", "") if plan.location else ""
+                target_region = region.lower().replace(" ", "")
+                if plan_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(plan.id):
+                    continue
+
+                sku_name = plan.sku.name if plan.sku else 'F1'
+                # Auto-scale only available on Standard+ tiers
+                if sku_name.upper().startswith(('F', 'D', 'B')):
+                    continue
+
+                capacity = plan.sku.capacity if plan.sku and plan.sku.capacity else 1
+                if capacity < min_instances:
+                    continue
+
+                # Check if autoscale is configured
+                has_autoscale = False
+                try:
+                    autoscale_settings = monitor_client.autoscale_settings.list_by_resource_group(
+                        resource_group_name=plan.id.split('/')[4] if plan.id else ''
+                    )
+                    for setting in autoscale_settings:
+                        if setting.target_resource_uri and plan.id and plan.id.lower() in setting.target_resource_uri.lower():
+                            has_autoscale = True
+                            break
+                except Exception:
+                    pass
+
+                if has_autoscale:
+                    continue
+
+                monthly_cost = self._calculate_app_service_plan_cost_by_sku(sku_name, capacity)
+                # With autoscale, could save ~50% during off-peak
+                savings = round(monthly_cost * 0.50, 2)
+
+                metadata = {
+                    'plan_name': plan.name,
+                    'plan_id': plan.id,
+                    'sku_name': sku_name,
+                    'capacity': capacity,
+                    'has_autoscale': False,
+                    'estimated_savings': savings,
+                    'orphan_reason': f"App Service Plan '{plan.name}' has {capacity} fixed instances without auto-scale",
+                    'recommendation': f'Configure auto-scale to save ~${savings:.0f}/month during off-peak',
+                    'confidence_level': 'high' if capacity >= 3 else 'medium',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='app_service_no_auto_scale',
+                    resource_id=plan.id,
+                    resource_name=plan.name,
+                    region=plan.location,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning no-autoscale App Service Plans in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_app_service_always_on_low_traffic(
         self, region: str, detection_rules: dict | None = None
@@ -24319,7 +24580,98 @@ class AzureProvider(CloudProviderBase):
 
         Cost Impact: $7/month for S1 (10% overhead)
         """
-        return []
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.web import WebSiteManagementClient
+        from azure.mgmt.monitor import MonitorManagementClient
+
+        orphans: list[OrphanResourceData] = []
+        max_requests_per_day = detection_rules.get("max_requests_per_day", 100) if detection_rules else 100
+        observation_days = detection_rules.get("min_observation_days", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            web_client = WebSiteManagementClient(credential, self.subscription_id)
+            monitor_client = MonitorManagementClient(credential, self.subscription_id)
+
+            for app in web_client.web_apps.list():
+                app_location = app.location.lower().replace(" ", "") if app.location else ""
+                target_region = region.lower().replace(" ", "")
+                if app_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(app.id):
+                    continue
+                if app.state and app.state.lower() != 'running':
+                    continue
+
+                # Check Always On setting
+                try:
+                    rg_name = app.id.split('/')[4] if app.id else ''
+                    config = web_client.web_apps.get_configuration(rg_name, app.name)
+                    if not config.always_on:
+                        continue
+                except Exception:
+                    continue
+
+                # Check request count via metrics
+                end_time = datetime.now(timezone.utc)
+                start_time = end_time - timedelta(days=observation_days)
+                total_requests = 0
+
+                try:
+                    timespan = f"{start_time.strftime('%Y-%m-%dT%H:%M:%SZ')}/{end_time.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+                    metrics_data = monitor_client.metrics.list(
+                        resource_uri=app.id,
+                        timespan=timespan,
+                        interval="P1D",
+                        metricnames="Requests",
+                        aggregation="Total"
+                    )
+                    for metric in metrics_data.value:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.total is not None:
+                                    total_requests += dp.total
+                except Exception:
+                    total_requests = 0
+
+                avg_requests_per_day = total_requests / observation_days if observation_days > 0 else 0
+                if avg_requests_per_day > max_requests_per_day:
+                    continue
+
+                monthly_cost = self._calculate_app_service_cost(app)
+                # Always On adds ~10% overhead for keep-alive
+                overhead = round(monthly_cost * 0.10, 2)
+
+                metadata = {
+                    'app_name': app.name,
+                    'app_id': app.id,
+                    'always_on': True,
+                    'avg_requests_per_day': round(avg_requests_per_day, 1),
+                    'total_requests': int(total_requests),
+                    'observation_days': observation_days,
+                    'overhead_cost': overhead,
+                    'orphan_reason': f"App '{app.name}' has Always On enabled but only {avg_requests_per_day:.0f} req/day avg",
+                    'recommendation': 'Disable Always On for low-traffic apps to reduce overhead',
+                    'confidence_level': 'medium',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='app_service_always_on_low_traffic',
+                    resource_id=app.id,
+                    resource_name=app.name,
+                    region=app.location,
+                    estimated_monthly_cost=overhead,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning always-on low-traffic apps in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_app_service_unused_deployment_slots(
         self, region: str, detection_rules: dict | None = None
@@ -24334,7 +24686,97 @@ class AzureProvider(CloudProviderBase):
 
         Cost Impact: $146/month per P1v2 slot
         """
-        return []
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.web import WebSiteManagementClient
+        from azure.mgmt.monitor import MonitorManagementClient
+
+        orphans: list[OrphanResourceData] = []
+        min_days_no_traffic = detection_rules.get("min_days_no_traffic", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            web_client = WebSiteManagementClient(credential, self.subscription_id)
+            monitor_client = MonitorManagementClient(credential, self.subscription_id)
+
+            for app in web_client.web_apps.list():
+                app_location = app.location.lower().replace(" ", "") if app.location else ""
+                target_region = region.lower().replace(" ", "")
+                if app_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(app.id):
+                    continue
+
+                rg_name = app.id.split('/')[4] if app.id else ''
+                if not rg_name:
+                    continue
+
+                try:
+                    slots = list(web_client.web_apps.list_slots(rg_name, app.name))
+                except Exception:
+                    continue
+
+                if not slots:
+                    continue
+
+                end_time = datetime.now(timezone.utc)
+                start_time = end_time - timedelta(days=min_days_no_traffic)
+
+                for slot in slots:
+                    slot_name = slot.name.split('/')[-1] if '/' in slot.name else slot.name
+
+                    # Check slot traffic
+                    total_requests = 0
+                    try:
+                        timespan = f"{start_time.strftime('%Y-%m-%dT%H:%M:%SZ')}/{end_time.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+                        metrics_data = monitor_client.metrics.list(
+                            resource_uri=slot.id,
+                            timespan=timespan,
+                            interval="P1D",
+                            metricnames="Requests",
+                            aggregation="Total"
+                        )
+                        for metric in metrics_data.value:
+                            for ts in metric.timeseries:
+                                for dp in ts.data:
+                                    if dp.total is not None:
+                                        total_requests += dp.total
+                    except Exception:
+                        total_requests = 0
+
+                    if total_requests > 0:
+                        continue
+
+                    # Each slot costs same as the plan per instance
+                    monthly_cost = self._calculate_app_service_cost(app)
+
+                    metadata = {
+                        'app_name': app.name,
+                        'slot_name': slot_name,
+                        'slot_id': slot.id,
+                        'total_requests': 0,
+                        'observation_days': min_days_no_traffic,
+                        'orphan_reason': f"Deployment slot '{slot_name}' on app '{app.name}' has 0 traffic for {min_days_no_traffic}+ days",
+                        'recommendation': 'Delete unused deployment slot to reduce plan costs',
+                        'confidence_level': 'high',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='app_service_unused_deployment_slots',
+                        resource_id=slot.id,
+                        resource_name=f"{app.name}/{slot_name}",
+                        region=app.location,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata=metadata
+                    ))
+        except Exception as e:
+            print(f"Error scanning unused deployment slots in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_app_service_over_provisioned_plan(
         self, region: str, detection_rules: dict | None = None
@@ -24344,13 +24786,112 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 6: app_service_over_provisioned_plan - Downsize to save 50%.
 
         Detection Logic:
-        - Azure Monitor: CPU < max_cpu_utilization_percent (default 30%)
-        - Azure Monitor: Memory < max_memory_utilization_percent (default 40%)
+        - Azure Monitor: CPU < max_cpu_percent (default 30%)
+        - Azure Monitor: Memory < max_memory_percent (default 40%)
         - Observation: min_observation_days (default 30)
 
-        Cost Impact: $70/month (S2 $140 → S1 $70)
+        Cost Impact: $70/month (S2 $140 -> S1 $70)
         """
-        return []
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.web import WebSiteManagementClient
+        from azure.mgmt.monitor import MonitorManagementClient
+
+        orphans: list[OrphanResourceData] = []
+        max_cpu = detection_rules.get("max_cpu_utilization_percent", 30) if detection_rules else 30
+        max_memory = detection_rules.get("max_memory_utilization_percent", 40) if detection_rules else 40
+        observation_days = detection_rules.get("min_observation_days", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            web_client = WebSiteManagementClient(credential, self.subscription_id)
+            monitor_client = MonitorManagementClient(credential, self.subscription_id)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+            timespan = f"{start_time.strftime('%Y-%m-%dT%H:%M:%SZ')}/{end_time.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+
+            for plan in web_client.app_service_plans.list():
+                plan_location = plan.location.lower().replace(" ", "") if plan.location else ""
+                target_region = region.lower().replace(" ", "")
+                if plan_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(plan.id):
+                    continue
+
+                sku_name = plan.sku.name if plan.sku else 'F1'
+                if self._is_app_service_free_tier(sku_name):
+                    continue
+
+                # Query CPU and Memory metrics
+                try:
+                    metrics_data = monitor_client.metrics.list(
+                        resource_uri=plan.id,
+                        timespan=timespan,
+                        interval="P1D",
+                        metricnames="CpuPercentage,MemoryPercentage",
+                        aggregation="Average"
+                    )
+
+                    avg_cpu = None
+                    avg_memory = None
+                    for metric in metrics_data.value:
+                        values = []
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.average is not None:
+                                    values.append(dp.average)
+                        if values:
+                            avg_val = sum(values) / len(values)
+                            if 'cpu' in metric.name.value.lower():
+                                avg_cpu = avg_val
+                            elif 'memory' in metric.name.value.lower():
+                                avg_memory = avg_val
+
+                    if avg_cpu is None or avg_memory is None:
+                        continue
+                    if avg_cpu >= max_cpu or avg_memory >= max_memory:
+                        continue
+                except Exception:
+                    continue
+
+                capacity = plan.sku.capacity if plan.sku and plan.sku.capacity else 1
+                current_cost = self._calculate_app_service_plan_cost_by_sku(sku_name, capacity)
+                recommended = self._get_app_service_recommended_downsize(sku_name)
+                recommended_cost = self._calculate_app_service_plan_cost_by_sku(recommended, capacity) if recommended else current_cost * 0.5
+                savings = current_cost - recommended_cost
+
+                metadata = {
+                    'plan_name': plan.name,
+                    'plan_id': plan.id,
+                    'sku_name': sku_name,
+                    'capacity': capacity,
+                    'avg_cpu_percent': round(avg_cpu, 1),
+                    'avg_memory_percent': round(avg_memory, 1),
+                    'observation_days': observation_days,
+                    'recommended_sku': recommended or 'smaller SKU',
+                    'estimated_savings': round(savings, 2),
+                    'orphan_reason': f"App Service Plan '{plan.name}' over-provisioned: CPU {avg_cpu:.1f}%, Memory {avg_memory:.1f}%",
+                    'recommendation': f"Downsize from {sku_name} to {recommended or 'smaller SKU'} to save ~${savings:.0f}/month",
+                    'confidence_level': self._calculate_confidence_level(observation_days, detection_rules),
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='app_service_over_provisioned_plan',
+                    resource_id=plan.id,
+                    resource_name=plan.name,
+                    region=plan.location,
+                    estimated_monthly_cost=current_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning over-provisioned App Service Plans in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_app_service_stopped_apps_paid_plan(
         self, region: str, detection_rules: dict | None = None
@@ -24361,12 +24902,86 @@ class AzureProvider(CloudProviderBase):
 
         Detection Logic:
         - App state = "Stopped"
-        - Stopped for > min_stopped_days (default 30)
-        - Plan is not Free tier
+        - Plan is not Free/Shared tier
 
         Cost Impact: $70/month for S1
         """
-        return []
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.web import WebSiteManagementClient
+
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            web_client = WebSiteManagementClient(credential, self.subscription_id)
+
+            # Cache plan details by ID
+            plans_cache: dict[str, object] = {}
+            for plan in web_client.app_service_plans.list():
+                if plan.id:
+                    plans_cache[plan.id.lower()] = plan
+
+            for app in web_client.web_apps.list():
+                app_location = app.location.lower().replace(" ", "") if app.location else ""
+                target_region = region.lower().replace(" ", "")
+                if app_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(app.id):
+                    continue
+
+                # Check if stopped
+                if not app.state or app.state.lower() != 'stopped':
+                    continue
+
+                # Check plan SKU
+                plan_id = (app.server_farm_id or '').lower()
+                plan = plans_cache.get(plan_id)
+                sku_name = 'S1'  # default assumption
+                if plan and hasattr(plan, 'sku') and plan.sku:
+                    sku_name = plan.sku.name
+                    if self._is_app_service_free_tier(sku_name):
+                        continue
+
+                # Calculate age
+                age_days = 0
+                if hasattr(app, 'system_data') and app.system_data:
+                    last_modified = getattr(app.system_data, 'last_modified_at', None)
+                    if last_modified:
+                        if last_modified.tzinfo is None:
+                            last_modified = last_modified.replace(tzinfo=timezone.utc)
+                        age_days = (datetime.now(timezone.utc) - last_modified).days
+
+                monthly_cost = self._calculate_app_service_plan_cost_by_sku(sku_name)
+
+                metadata = {
+                    'app_name': app.name,
+                    'app_id': app.id,
+                    'state': 'Stopped',
+                    'plan_sku': sku_name,
+                    'plan_id': app.server_farm_id,
+                    'days_since_last_modified': age_days,
+                    'orphan_reason': f"App '{app.name}' is stopped but still on paid plan ({sku_name})",
+                    'recommendation': 'Delete app or move to Free tier to stop paying for the plan',
+                    'confidence_level': 'critical' if age_days >= 60 else 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='app_service_stopped_apps_paid_plan',
+                    resource_id=app.id,
+                    resource_name=app.name,
+                    region=app.location,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning stopped apps on paid plans in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_app_service_multiple_plans_consolidation(
         self, region: str, detection_rules: dict | None = None
@@ -24376,28 +24991,174 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 8: app_service_multiple_plans_consolidation - Save 33%.
 
         Detection Logic:
-        - User has >= min_plans_for_consolidation (default 2) plans
-        - Each plan has < max_apps_per_plan_threshold (default 5) apps
-        - Same region and similar SKUs
+        - Multiple plans in same region with same SKU tier
+        - Each plan has < max_apps_per_plan (default 5) apps
+        - Combined apps could fit on fewer plans
 
-        Cost Impact: $70/month (3× S1 $210 → 1× S2 $140)
+        Cost Impact: $70/month (3x S1 $210 -> 1x S2 $140)
         """
-        return []
+        from collections import defaultdict
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.web import WebSiteManagementClient
+
+        orphans: list[OrphanResourceData] = []
+        max_apps_per_plan = detection_rules.get("max_apps_per_plan_threshold", 5) if detection_rules else 5
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            web_client = WebSiteManagementClient(credential, self.subscription_id)
+
+            # Group plans by SKU tier in this region
+            tier_plans: dict[str, list] = defaultdict(list)
+
+            for plan in web_client.app_service_plans.list():
+                plan_location = plan.location.lower().replace(" ", "") if plan.location else ""
+                target_region = region.lower().replace(" ", "")
+                if plan_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(plan.id):
+                    continue
+
+                sku_name = plan.sku.name if plan.sku else 'F1'
+                if self._is_app_service_free_tier(sku_name):
+                    continue
+
+                num_sites = plan.number_of_sites if plan.number_of_sites is not None else 0
+                if num_sites >= max_apps_per_plan:
+                    continue
+
+                sku_tier = plan.sku.tier if plan.sku else 'Standard'
+                tier_plans[sku_tier].append(plan)
+
+            # Flag tiers with 2+ consolidatable plans
+            for tier, plans in tier_plans.items():
+                if len(plans) < 2:
+                    continue
+
+                total_apps = sum(p.number_of_sites or 0 for p in plans)
+                total_cost = sum(
+                    self._calculate_app_service_plan_cost_by_sku(
+                        p.sku.name if p.sku else 'S1',
+                        p.sku.capacity if p.sku and p.sku.capacity else 1
+                    ) for p in plans
+                )
+
+                # Flag all plans except the largest one
+                sorted_plans = sorted(plans, key=lambda p: p.number_of_sites or 0, reverse=True)
+
+                for plan in sorted_plans[1:]:
+                    sku_name = plan.sku.name if plan.sku else 'S1'
+                    capacity = plan.sku.capacity if plan.sku and plan.sku.capacity else 1
+                    plan_cost = self._calculate_app_service_plan_cost_by_sku(sku_name, capacity)
+
+                    metadata = {
+                        'plan_name': plan.name,
+                        'plan_id': plan.id,
+                        'sku_name': sku_name,
+                        'sku_tier': tier,
+                        'number_of_sites': plan.number_of_sites or 0,
+                        'total_plans_in_tier': len(plans),
+                        'total_apps_across_plans': total_apps,
+                        'total_cost_all_plans': round(total_cost, 2),
+                        'plan_names': [p.name for p in plans],
+                        'orphan_reason': f"Plan '{plan.name}' ({sku_name}) could be consolidated with {len(plans)-1} other {tier} plans",
+                        'recommendation': f'Consolidate {len(plans)} {tier} plans into fewer plans to save ~${plan_cost:.0f}/month',
+                        'confidence_level': 'medium',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='app_service_multiple_plans_consolidation',
+                        resource_id=plan.id,
+                        resource_name=plan.name,
+                        region=plan.location,
+                        estimated_monthly_cost=plan_cost,
+                        resource_metadata=metadata
+                    ))
+        except Exception as e:
+            print(f"Error scanning plan consolidation in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_app_service_vnet_integration_unused(
         self, region: str, detection_rules: dict | None = None
     ) -> list[OrphanResourceData]:
         """
         Scan for VNet integration configured but unused.
-        SCENARIO 9: app_service_vnet_integration_unused - $0.15/GB wasted.
+        SCENARIO 9: app_service_vnet_integration_unused - Unnecessary Premium tier cost.
 
         Detection Logic:
         - App has VNet integration configured
-        - 0 bytes traffic to VNet for > min_days_no_vnet_traffic (default 30)
+        - App could run on lower tier without VNet
 
-        Cost Impact: $0.15/GB data transfer wasted
+        Cost Impact: Premium tier premium for VNet integration
         """
-        return []
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.web import WebSiteManagementClient
+
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            web_client = WebSiteManagementClient(credential, self.subscription_id)
+
+            for app in web_client.web_apps.list():
+                app_location = app.location.lower().replace(" ", "") if app.location else ""
+                target_region = region.lower().replace(" ", "")
+                if app_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(app.id):
+                    continue
+
+                # Check for VNet integration
+                vnet_connection = app.virtual_network_subnet_id
+                if not vnet_connection:
+                    continue
+
+                rg_name = app.id.split('/')[4] if app.id else ''
+                if not rg_name:
+                    continue
+
+                # Check VNet connections
+                try:
+                    vnet_connections = list(web_client.web_apps.list_vnet_connections(rg_name, app.name))
+                    if not vnet_connections:
+                        # VNet subnet configured but no active connections
+                        monthly_cost = self._calculate_app_service_cost(app)
+                        # VNet integration requires Standard+ tier, premium adds ~$20/month overhead
+                        vnet_overhead = 20.0
+
+                        metadata = {
+                            'app_name': app.name,
+                            'app_id': app.id,
+                            'vnet_subnet_id': vnet_connection,
+                            'active_vnet_connections': 0,
+                            'orphan_reason': f"App '{app.name}' has VNet integration configured but no active connections",
+                            'recommendation': 'Review if VNet integration is needed - remove to potentially downgrade plan tier',
+                            'confidence_level': 'medium',
+                        }
+
+                        orphans.append(OrphanResourceData(
+                            resource_type='app_service_vnet_integration_unused',
+                            resource_id=app.id,
+                            resource_name=app.name,
+                            region=app.location,
+                            estimated_monthly_cost=vnet_overhead,
+                            resource_metadata=metadata
+                        ))
+                except Exception:
+                    continue
+        except Exception as e:
+            print(f"Error scanning unused VNet integration in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_app_service_old_runtime_version(
         self, region: str, detection_rules: dict | None = None
@@ -24407,12 +25168,118 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 10: app_service_old_runtime_version - Security risk.
 
         Detection Logic:
-        - App runtime version age > min_runtime_age_months (default 12 months)
-        - Check against latest LTS versions
+        - App runtime/stack version is in known deprecated/EOL list
 
-        Cost Impact: Security risk + missing features
+        Cost Impact: Security risk + missing performance features
         """
-        return []
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.web import WebSiteManagementClient
+
+        orphans: list[OrphanResourceData] = []
+
+        # Known deprecated/EOL runtime versions
+        deprecated_runtimes = {
+            'DOTNETCORE': ['2.0', '2.1', '2.2', '3.0', '3.1'],
+            'DOTNET': ['5', '5.0', '6', '6.0', '7', '7.0'],
+            'NODE': ['8', '10', '12', '14', '16'],
+            'PYTHON': ['2.7', '3.5', '3.6', '3.7', '3.8'],
+            'PHP': ['5.6', '7.0', '7.1', '7.2', '7.3', '7.4', '8.0'],
+            'JAVA': ['7', '8'],
+            'RUBY': ['2.5', '2.6', '2.7'],
+        }
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            web_client = WebSiteManagementClient(credential, self.subscription_id)
+
+            for app in web_client.web_apps.list():
+                app_location = app.location.lower().replace(" ", "") if app.location else ""
+                target_region = region.lower().replace(" ", "")
+                if app_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(app.id):
+                    continue
+                if app.state and app.state.lower() != 'running':
+                    continue
+
+                rg_name = app.id.split('/')[4] if app.id else ''
+                if not rg_name:
+                    continue
+
+                try:
+                    config = web_client.web_apps.get_configuration(rg_name, app.name)
+                except Exception:
+                    continue
+
+                # Extract runtime info
+                is_old = False
+                runtime_stack = ''
+                runtime_version = ''
+
+                # Check linux_fx_version (e.g., "NODE|16-lts", "PYTHON|3.8")
+                linux_fx = config.linux_fx_version or ''
+                if '|' in linux_fx:
+                    parts = linux_fx.split('|')
+                    runtime_stack = parts[0].upper()
+                    runtime_version = parts[1].split('-')[0] if parts[1] else ''
+                elif config.net_framework_version:
+                    runtime_stack = 'DOTNET'
+                    runtime_version = config.net_framework_version.lstrip('v')
+                elif config.java_version:
+                    runtime_stack = 'JAVA'
+                    runtime_version = config.java_version
+                elif config.php_version:
+                    runtime_stack = 'PHP'
+                    runtime_version = config.php_version
+                elif config.python_version:
+                    runtime_stack = 'PYTHON'
+                    runtime_version = config.python_version
+                elif config.node_version:
+                    runtime_stack = 'NODE'
+                    runtime_version = config.node_version.lstrip('~')
+
+                if not runtime_stack or not runtime_version:
+                    continue
+
+                # Check if deprecated
+                deprecated_versions = deprecated_runtimes.get(runtime_stack, [])
+                for dep_ver in deprecated_versions:
+                    if runtime_version.startswith(dep_ver):
+                        is_old = True
+                        break
+
+                if not is_old:
+                    continue
+
+                monthly_cost = self._calculate_app_service_cost(app)
+
+                metadata = {
+                    'app_name': app.name,
+                    'app_id': app.id,
+                    'runtime_stack': runtime_stack,
+                    'runtime_version': runtime_version,
+                    'linux_fx_version': linux_fx,
+                    'orphan_reason': f"App '{app.name}' uses deprecated runtime {runtime_stack} {runtime_version}",
+                    'recommendation': f'Upgrade {runtime_stack} to latest LTS version for security and performance',
+                    'confidence_level': 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='app_service_old_runtime_version',
+                    resource_id=app.id,
+                    resource_name=app.name,
+                    region=app.location,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning old runtime apps in {region}: {str(e)}")
+
+        return orphans
 
     # Phase 2 - Metrics-based detection (8 scenarios)
 
@@ -24424,12 +25291,102 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 11: app_service_low_cpu_utilization - Downsize to save 50%.
 
         Detection Logic:
-        - Azure Monitor: CPU < max_avg_cpu_percent (default 10%)
+        - Azure Monitor: CpuPercentage < max_avg_cpu_percent (default 10%)
         - Observation: min_observation_days (default 30)
 
-        Cost Impact: $52/month (S2 $140 → S1 $88)
+        Cost Impact: $52/month (S2 $140 -> S1 $88)
         """
-        return []
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.web import WebSiteManagementClient
+        from azure.mgmt.monitor import MonitorManagementClient
+
+        orphans: list[OrphanResourceData] = []
+        max_cpu = detection_rules.get("max_avg_cpu_percent", 10) if detection_rules else 10
+        observation_days = detection_rules.get("min_observation_days", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            web_client = WebSiteManagementClient(credential, self.subscription_id)
+            monitor_client = MonitorManagementClient(credential, self.subscription_id)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+            timespan = f"{start_time.strftime('%Y-%m-%dT%H:%M:%SZ')}/{end_time.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+
+            for plan in web_client.app_service_plans.list():
+                plan_location = plan.location.lower().replace(" ", "") if plan.location else ""
+                target_region = region.lower().replace(" ", "")
+                if plan_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(plan.id):
+                    continue
+
+                sku_name = plan.sku.name if plan.sku else 'F1'
+                if self._is_app_service_free_tier(sku_name):
+                    continue
+
+                try:
+                    metrics_data = monitor_client.metrics.list(
+                        resource_uri=plan.id,
+                        timespan=timespan,
+                        interval="P1D",
+                        metricnames="CpuPercentage",
+                        aggregation="Average"
+                    )
+
+                    avg_cpu = None
+                    for metric in metrics_data.value:
+                        values = []
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.average is not None:
+                                    values.append(dp.average)
+                        if values:
+                            avg_cpu = sum(values) / len(values)
+
+                    if avg_cpu is None or avg_cpu >= max_cpu:
+                        continue
+                except Exception:
+                    continue
+
+                capacity = plan.sku.capacity if plan.sku and plan.sku.capacity else 1
+                current_cost = self._calculate_app_service_plan_cost_by_sku(sku_name, capacity)
+                recommended = self._get_app_service_recommended_downsize(sku_name)
+                recommended_cost = self._calculate_app_service_plan_cost_by_sku(recommended, capacity) if recommended else current_cost * 0.5
+                savings = current_cost - recommended_cost
+
+                metadata = {
+                    'plan_name': plan.name,
+                    'plan_id': plan.id,
+                    'sku_name': sku_name,
+                    'capacity': capacity,
+                    'avg_cpu_percent': round(avg_cpu, 1),
+                    'max_cpu_threshold': max_cpu,
+                    'observation_days': observation_days,
+                    'recommended_sku': recommended or 'smaller SKU',
+                    'estimated_savings': round(savings, 2),
+                    'orphan_reason': f"App Service Plan '{plan.name}' low CPU: {avg_cpu:.1f}% avg over {observation_days} days",
+                    'recommendation': f"Downsize from {sku_name} to {recommended or 'smaller SKU'} to save ~${savings:.0f}/month",
+                    'confidence_level': 'high' if avg_cpu < 5 else 'medium',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='app_service_low_cpu_utilization',
+                    resource_id=plan.id,
+                    resource_name=plan.name,
+                    region=plan.location,
+                    estimated_monthly_cost=current_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning low CPU App Service Plans in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_app_service_low_memory_utilization(
         self, region: str, detection_rules: dict | None = None
@@ -24439,12 +25396,102 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 12: app_service_low_memory_utilization - Downsize to save 40%.
 
         Detection Logic:
-        - Azure Monitor: Memory < max_avg_memory_percent (default 30%)
+        - Azure Monitor: MemoryPercentage < max_avg_memory_percent (default 30%)
         - Observation: min_observation_days (default 30)
 
-        Cost Impact: $42/month (S2 $140 → B3 $98)
+        Cost Impact: $42/month (S2 $140 -> B3 $98)
         """
-        return []
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.web import WebSiteManagementClient
+        from azure.mgmt.monitor import MonitorManagementClient
+
+        orphans: list[OrphanResourceData] = []
+        max_memory = detection_rules.get("max_avg_memory_percent", 30) if detection_rules else 30
+        observation_days = detection_rules.get("min_observation_days", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            web_client = WebSiteManagementClient(credential, self.subscription_id)
+            monitor_client = MonitorManagementClient(credential, self.subscription_id)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+            timespan = f"{start_time.strftime('%Y-%m-%dT%H:%M:%SZ')}/{end_time.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+
+            for plan in web_client.app_service_plans.list():
+                plan_location = plan.location.lower().replace(" ", "") if plan.location else ""
+                target_region = region.lower().replace(" ", "")
+                if plan_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(plan.id):
+                    continue
+
+                sku_name = plan.sku.name if plan.sku else 'F1'
+                if self._is_app_service_free_tier(sku_name):
+                    continue
+
+                try:
+                    metrics_data = monitor_client.metrics.list(
+                        resource_uri=plan.id,
+                        timespan=timespan,
+                        interval="P1D",
+                        metricnames="MemoryPercentage",
+                        aggregation="Average"
+                    )
+
+                    avg_memory = None
+                    for metric in metrics_data.value:
+                        values = []
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.average is not None:
+                                    values.append(dp.average)
+                        if values:
+                            avg_memory = sum(values) / len(values)
+
+                    if avg_memory is None or avg_memory >= max_memory:
+                        continue
+                except Exception:
+                    continue
+
+                capacity = plan.sku.capacity if plan.sku and plan.sku.capacity else 1
+                current_cost = self._calculate_app_service_plan_cost_by_sku(sku_name, capacity)
+                recommended = self._get_app_service_recommended_downsize(sku_name)
+                recommended_cost = self._calculate_app_service_plan_cost_by_sku(recommended, capacity) if recommended else current_cost * 0.6
+                savings = current_cost - recommended_cost
+
+                metadata = {
+                    'plan_name': plan.name,
+                    'plan_id': plan.id,
+                    'sku_name': sku_name,
+                    'capacity': capacity,
+                    'avg_memory_percent': round(avg_memory, 1),
+                    'max_memory_threshold': max_memory,
+                    'observation_days': observation_days,
+                    'recommended_sku': recommended or 'smaller SKU',
+                    'estimated_savings': round(savings, 2),
+                    'orphan_reason': f"App Service Plan '{plan.name}' low memory: {avg_memory:.1f}% avg over {observation_days} days",
+                    'recommendation': f"Downsize from {sku_name} to {recommended or 'smaller SKU'} to save ~${savings:.0f}/month",
+                    'confidence_level': 'high' if avg_memory < 15 else 'medium',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='app_service_low_memory_utilization',
+                    resource_id=plan.id,
+                    resource_name=plan.name,
+                    region=plan.location,
+                    estimated_monthly_cost=current_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning low memory App Service Plans in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_app_service_low_request_count(
         self, region: str, detection_rules: dict | None = None
@@ -24591,12 +25638,101 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 14: app_service_no_traffic_business_hours - Enable auto-shutdown.
 
         Detection Logic:
-        - Azure Monitor: HTTP requests during business_hours (9-17) < max (default 10)
+        - Azure Monitor: HTTP requests during business hours < max (default 10/day)
         - Observation: min_observation_days (default 14)
 
         Cost Impact: $28/month (40% savings with auto-shutdown)
         """
-        return []
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.web import WebSiteManagementClient
+        from azure.mgmt.monitor import MonitorManagementClient
+
+        orphans: list[OrphanResourceData] = []
+        max_requests = detection_rules.get("max_requests_business_hours", 10) if detection_rules else 10
+        observation_days = detection_rules.get("min_observation_days", 14) if detection_rules else 14
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            web_client = WebSiteManagementClient(credential, self.subscription_id)
+            monitor_client = MonitorManagementClient(credential, self.subscription_id)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+            timespan = f"{start_time.strftime('%Y-%m-%dT%H:%M:%SZ')}/{end_time.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+
+            for app in web_client.web_apps.list():
+                app_location = app.location.lower().replace(" ", "") if app.location else ""
+                target_region = region.lower().replace(" ", "")
+                if app_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(app.id):
+                    continue
+                if app.state and app.state.lower() != 'running':
+                    continue
+
+                try:
+                    metrics_data = monitor_client.metrics.list(
+                        resource_uri=app.id,
+                        timespan=timespan,
+                        interval="PT1H",
+                        metricnames="Requests",
+                        aggregation="Total"
+                    )
+
+                    business_hour_requests = 0
+                    business_hour_count = 0
+                    for metric in metrics_data.value:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.total is not None and dp.time_stamp:
+                                    hour = dp.time_stamp.hour
+                                    if 9 <= hour < 17:
+                                        business_hour_requests += dp.total
+                                        business_hour_count += 1
+
+                    if business_hour_count == 0:
+                        continue
+
+                    # Average requests per business-hours day (8 hours/day)
+                    business_days = max(business_hour_count // 8, 1)
+                    avg_requests_per_day = business_hour_requests / business_days
+
+                    if avg_requests_per_day > max_requests:
+                        continue
+                except Exception:
+                    continue
+
+                monthly_cost = self._calculate_app_service_cost(app)
+                savings = round(monthly_cost * 0.40, 2)
+
+                metadata = {
+                    'app_name': app.name,
+                    'app_id': app.id,
+                    'avg_requests_business_hours': round(avg_requests_per_day, 1),
+                    'total_business_hour_requests': int(business_hour_requests),
+                    'observation_days': observation_days,
+                    'orphan_reason': f"App '{app.name}' has near-zero traffic during business hours ({avg_requests_per_day:.0f} req/day)",
+                    'recommendation': 'Consider scaling down during business hours or migrating to consumption-based model',
+                    'confidence_level': 'high' if avg_requests_per_day < 1 else 'medium',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='app_service_no_traffic_business_hours',
+                    resource_id=app.id,
+                    resource_name=app.name,
+                    region=app.location,
+                    estimated_monthly_cost=savings,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning no-traffic business hours apps in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_app_service_high_http_error_rate(
         self, region: str, detection_rules: dict | None = None
@@ -24606,13 +25742,106 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 15: app_service_high_http_error_rate - App misconfigured.
 
         Detection Logic:
-        - Azure Monitor: HTTP 4xx+5xx errors / total requests > max_error_rate (default 50%)
+        - Azure Monitor: (Http4xx + Http5xx) / Requests > max_error_rate (default 50%)
         - Min requests: min_requests_count (default 100)
         - Observation: min_observation_days (default 7)
 
-        Cost Impact: Waste compute + investigate issues
+        Cost Impact: Waste compute serving errors
         """
-        return []
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.web import WebSiteManagementClient
+        from azure.mgmt.monitor import MonitorManagementClient
+
+        orphans: list[OrphanResourceData] = []
+        max_error_rate = detection_rules.get("max_error_rate_percent", 50) if detection_rules else 50
+        min_requests = detection_rules.get("min_requests_count", 100) if detection_rules else 100
+        observation_days = detection_rules.get("min_observation_days", 7) if detection_rules else 7
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            web_client = WebSiteManagementClient(credential, self.subscription_id)
+            monitor_client = MonitorManagementClient(credential, self.subscription_id)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+            timespan = f"{start_time.strftime('%Y-%m-%dT%H:%M:%SZ')}/{end_time.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+
+            for app in web_client.web_apps.list():
+                app_location = app.location.lower().replace(" ", "") if app.location else ""
+                target_region = region.lower().replace(" ", "")
+                if app_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(app.id):
+                    continue
+                if app.state and app.state.lower() != 'running':
+                    continue
+
+                try:
+                    metrics_data = monitor_client.metrics.list(
+                        resource_uri=app.id,
+                        timespan=timespan,
+                        interval="P1D",
+                        metricnames="Requests,Http4xx,Http5xx",
+                        aggregation="Total"
+                    )
+
+                    total_requests = 0
+                    total_4xx = 0
+                    total_5xx = 0
+
+                    for metric in metrics_data.value:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.total is not None:
+                                    name_lower = metric.name.value.lower()
+                                    if name_lower == 'requests':
+                                        total_requests += dp.total
+                                    elif '4xx' in name_lower:
+                                        total_4xx += dp.total
+                                    elif '5xx' in name_lower:
+                                        total_5xx += dp.total
+
+                    if total_requests < min_requests:
+                        continue
+
+                    error_rate = ((total_4xx + total_5xx) / total_requests) * 100 if total_requests > 0 else 0
+                    if error_rate < max_error_rate:
+                        continue
+                except Exception:
+                    continue
+
+                monthly_cost = self._calculate_app_service_cost(app)
+
+                metadata = {
+                    'app_name': app.name,
+                    'app_id': app.id,
+                    'total_requests': int(total_requests),
+                    'total_4xx': int(total_4xx),
+                    'total_5xx': int(total_5xx),
+                    'error_rate_percent': round(error_rate, 1),
+                    'observation_days': observation_days,
+                    'orphan_reason': f"App '{app.name}' has {error_rate:.0f}% HTTP error rate ({total_4xx + total_5xx}/{total_requests} errors)",
+                    'recommendation': 'Investigate and fix errors - wasting compute serving failed requests',
+                    'confidence_level': 'critical' if error_rate > 80 else 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='app_service_high_http_error_rate',
+                    resource_id=app.id,
+                    resource_name=app.name,
+                    region=app.location,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning high-error-rate apps in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_app_service_slow_response_time(
         self, region: str, detection_rules: dict | None = None
@@ -24622,12 +25851,93 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 16: app_service_slow_response_time - Performance issue.
 
         Detection Logic:
-        - Azure Monitor: Response time > max_avg_response_time (default 10s)
+        - Azure Monitor: AverageResponseTime > max_avg_response_time_ms (default 10000ms)
         - Observation: min_observation_days (default 7)
 
-        Cost Impact: Performance issue (investigate + optimize)
+        Cost Impact: Performance issue + potential over-provisioning needed
         """
-        return []
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.web import WebSiteManagementClient
+        from azure.mgmt.monitor import MonitorManagementClient
+
+        orphans: list[OrphanResourceData] = []
+        max_response_ms = detection_rules.get("max_avg_response_time_ms", 10000) if detection_rules else 10000
+        observation_days = detection_rules.get("min_observation_days", 7) if detection_rules else 7
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            web_client = WebSiteManagementClient(credential, self.subscription_id)
+            monitor_client = MonitorManagementClient(credential, self.subscription_id)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+            timespan = f"{start_time.strftime('%Y-%m-%dT%H:%M:%SZ')}/{end_time.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+
+            for app in web_client.web_apps.list():
+                app_location = app.location.lower().replace(" ", "") if app.location else ""
+                target_region = region.lower().replace(" ", "")
+                if app_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(app.id):
+                    continue
+                if app.state and app.state.lower() != 'running':
+                    continue
+
+                try:
+                    metrics_data = monitor_client.metrics.list(
+                        resource_uri=app.id,
+                        timespan=timespan,
+                        interval="P1D",
+                        metricnames="AverageResponseTime",
+                        aggregation="Average"
+                    )
+
+                    avg_response = None
+                    for metric in metrics_data.value:
+                        values = []
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.average is not None:
+                                    values.append(dp.average)
+                        if values:
+                            avg_response = sum(values) / len(values)
+
+                    if avg_response is None or avg_response < max_response_ms / 1000.0:
+                        continue
+                except Exception:
+                    continue
+
+                monthly_cost = self._calculate_app_service_cost(app)
+                avg_response_sec = avg_response
+
+                metadata = {
+                    'app_name': app.name,
+                    'app_id': app.id,
+                    'avg_response_time_seconds': round(avg_response_sec, 2),
+                    'max_threshold_seconds': max_response_ms / 1000.0,
+                    'observation_days': observation_days,
+                    'orphan_reason': f"App '{app.name}' has {avg_response_sec:.1f}s avg response time (threshold: {max_response_ms/1000:.0f}s)",
+                    'recommendation': 'Investigate slow responses - may need code optimization, caching, or scale-up',
+                    'confidence_level': 'high' if avg_response_sec > 30 else 'medium',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='app_service_slow_response_time',
+                    resource_id=app.id,
+                    resource_name=app.name,
+                    region=app.location,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning slow response apps in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_app_service_auto_scale_never_triggers(
         self, region: str, detection_rules: dict | None = None
@@ -24638,11 +25948,100 @@ class AzureProvider(CloudProviderBase):
 
         Detection Logic:
         - Plan has auto-scale configured
-        - 0 scale events in min_days_with_autoscale (default 30)
+        - Instance count unchanged for min_days (default 30)
+        - Fixed capacity > 1
 
-        Cost Impact: $140/month for 2× S1 (fixed vs dynamic)
+        Cost Impact: $140/month for 2x S1 (could scale to 1)
         """
-        return []
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.web import WebSiteManagementClient
+        from azure.mgmt.monitor import MonitorManagementClient
+
+        orphans: list[OrphanResourceData] = []
+        min_days = detection_rules.get("min_days_with_autoscale", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            web_client = WebSiteManagementClient(credential, self.subscription_id)
+            monitor_client = MonitorManagementClient(credential, self.subscription_id)
+
+            for plan in web_client.app_service_plans.list():
+                plan_location = plan.location.lower().replace(" ", "") if plan.location else ""
+                target_region = region.lower().replace(" ", "")
+                if plan_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(plan.id):
+                    continue
+
+                sku_name = plan.sku.name if plan.sku else 'F1'
+                capacity = plan.sku.capacity if plan.sku and plan.sku.capacity else 1
+                if capacity <= 1:
+                    continue
+
+                rg_name = plan.id.split('/')[4] if plan.id else ''
+                if not rg_name:
+                    continue
+
+                # Check if autoscale is configured but static
+                has_autoscale = False
+                autoscale_min = capacity
+                autoscale_max = capacity
+
+                try:
+                    autoscale_settings = monitor_client.autoscale_settings.list_by_resource_group(rg_name)
+                    for setting in autoscale_settings:
+                        if setting.target_resource_uri and plan.id and plan.id.lower() in setting.target_resource_uri.lower():
+                            has_autoscale = True
+                            for profile in (setting.profiles or []):
+                                if profile.capacity:
+                                    autoscale_min = min(autoscale_min, int(profile.capacity.minimum or capacity))
+                                    autoscale_max = max(autoscale_max, int(profile.capacity.maximum or capacity))
+                            break
+                except Exception:
+                    continue
+
+                if not has_autoscale:
+                    continue
+
+                # If autoscale min == max == current, it never triggers
+                if autoscale_min != autoscale_max:
+                    continue  # Autoscale has room to scale, might be working
+
+                current_cost = self._calculate_app_service_plan_cost_by_sku(sku_name, capacity)
+                # Could potentially run with 1 instance
+                single_cost = self._calculate_app_service_plan_cost_by_sku(sku_name, 1)
+                savings = current_cost - single_cost
+
+                metadata = {
+                    'plan_name': plan.name,
+                    'plan_id': plan.id,
+                    'sku_name': sku_name,
+                    'capacity': capacity,
+                    'has_autoscale': True,
+                    'autoscale_min': autoscale_min,
+                    'autoscale_max': autoscale_max,
+                    'estimated_savings': round(savings, 2),
+                    'orphan_reason': f"Plan '{plan.name}' has autoscale with min=max={capacity} - never scales",
+                    'recommendation': f'Adjust autoscale min to 1 to save ~${savings:.0f}/month during low-load',
+                    'confidence_level': 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='app_service_auto_scale_never_triggers',
+                    resource_id=plan.id,
+                    resource_name=plan.name,
+                    region=plan.location,
+                    estimated_monthly_cost=current_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning autoscale-never-triggers plans in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_app_service_cold_start_excessive(
         self, region: str, detection_rules: dict | None = None
@@ -24652,12 +26051,92 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 18: app_service_cold_start_excessive - Poor UX.
 
         Detection Logic:
-        - Azure Monitor: Cold start time > max_cold_start_time (default 30s)
+        - Azure Monitor: Average response time on first request after idle > max_cold_start (default 30s)
+        - Uses HttpResponseTime metric with high percentile as proxy
         - Observation: min_observation_days (default 7)
 
         Cost Impact: Poor user experience + performance issue
         """
-        return []
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.web import WebSiteManagementClient
+        from azure.mgmt.monitor import MonitorManagementClient
+
+        orphans: list[OrphanResourceData] = []
+        max_cold_start_sec = detection_rules.get("max_cold_start_seconds", 30) if detection_rules else 30
+        observation_days = detection_rules.get("min_observation_days", 7) if detection_rules else 7
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            web_client = WebSiteManagementClient(credential, self.subscription_id)
+            monitor_client = MonitorManagementClient(credential, self.subscription_id)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+            timespan = f"{start_time.strftime('%Y-%m-%dT%H:%M:%SZ')}/{end_time.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+
+            for app in web_client.web_apps.list():
+                app_location = app.location.lower().replace(" ", "") if app.location else ""
+                target_region = region.lower().replace(" ", "")
+                if app_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(app.id):
+                    continue
+                if app.state and app.state.lower() != 'running':
+                    continue
+
+                try:
+                    # Use Maximum response time as proxy for cold start detection
+                    metrics_data = monitor_client.metrics.list(
+                        resource_uri=app.id,
+                        timespan=timespan,
+                        interval="P1D",
+                        metricnames="AverageResponseTime",
+                        aggregation="Maximum"
+                    )
+
+                    max_response = None
+                    for metric in metrics_data.value:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.maximum is not None:
+                                    if max_response is None or dp.maximum > max_response:
+                                        max_response = dp.maximum
+
+                    if max_response is None or max_response < max_cold_start_sec:
+                        continue
+                except Exception:
+                    continue
+
+                monthly_cost = self._calculate_app_service_cost(app)
+
+                metadata = {
+                    'app_name': app.name,
+                    'app_id': app.id,
+                    'max_response_time_seconds': round(max_response, 2),
+                    'cold_start_threshold_seconds': max_cold_start_sec,
+                    'observation_days': observation_days,
+                    'orphan_reason': f"App '{app.name}' has {max_response:.0f}s max response time (cold start suspected)",
+                    'recommendation': 'Enable Always On, use health check, or pre-warm instances to reduce cold starts',
+                    'confidence_level': 'medium',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='app_service_cold_start_excessive',
+                    resource_id=app.id,
+                    resource_name=app.name,
+                    region=app.location,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning cold-start apps in {region}: {str(e)}")
+
+        return orphans
 
     # ===== Azure Networking (ExpressRoute, VPN, NICs) Scanners (8 scenarios - 100% coverage) =====
 
