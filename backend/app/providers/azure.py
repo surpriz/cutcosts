@@ -22532,27 +22532,201 @@ class AzureProvider(CloudProviderBase):
     def _calculate_ml_compute_cost(self, vm_size: str) -> float:
         """
         Calculate monthly cost for ML Compute Instance based on VM size.
-
-        Common Azure ML VM sizes and approximate costs (US East):
-        - Standard_DS1_v2: ~$54/month
-        - Standard_DS2_v2: ~$108/month
-        - Standard_DS3_v2: ~$168/month
-        - Standard_DS4_v2: ~$336/month
-        - NC6 (GPU): ~$657/month
+        Prices approximate for US East region (730 hours/month).
         """
         costs = {
+            # DS series (General Purpose)
             'Standard_DS1_v2': 54.0,
             'Standard_DS2_v2': 108.0,
             'Standard_DS3_v2': 168.0,
             'Standard_DS4_v2': 336.0,
+            'Standard_DS5_v2': 672.0,
+            'Standard_DS11_v2': 149.0,
+            'Standard_DS12_v2': 297.0,
+            'Standard_DS13_v2': 594.0,
+            'Standard_DS14_v2': 1188.0,
+            'Standard_DS15_v2': 1485.0,
+            # D series v2
             'Standard_D2_v2': 108.0,
             'Standard_D4_v2': 216.0,
+            'Standard_D8_v2': 432.0,
+            # D series v3
+            'Standard_D2s_v3': 73.0,
+            'Standard_D4s_v3': 146.0,
+            'Standard_D8s_v3': 292.0,
+            'Standard_D16s_v3': 584.0,
+            'Standard_D32s_v3': 1168.0,
+            # E series (Memory Optimized)
+            'Standard_E2s_v3': 92.0,
+            'Standard_E4s_v3': 184.0,
+            'Standard_E8s_v3': 368.0,
+            'Standard_E16s_v3': 736.0,
+            'Standard_E32s_v3': 1472.0,
+            'Standard_E64s_v3': 2611.0,
+            # NC series (GPU - Tesla K80)
             'Standard_NC6': 657.0,
             'Standard_NC12': 1314.0,
             'Standard_NC24': 2628.0,
+            # NC v2 series (GPU - Tesla P100)
+            'Standard_NC6s_v2': 2190.0,
+            'Standard_NC12s_v2': 4380.0,
+            'Standard_NC24s_v2': 8760.0,
+            # NC v3 series (GPU - Tesla V100)
+            'Standard_NC6s_v3': 2701.0,
+            'Standard_NC12s_v3': 5402.0,
+            'Standard_NC24s_v3': 10804.0,
+            # ND series (GPU - Tesla P40)
+            'Standard_ND6s': 2117.0,
+            'Standard_ND12s': 4234.0,
+            'Standard_ND24s': 8468.0,
+            # ND v2 series (GPU - Tesla V100 x8)
+            'Standard_ND40rs_v2': 22338.0,
+            # NV series (GPU - Tesla M60)
+            'Standard_NV6': 1022.0,
+            'Standard_NV12': 2044.0,
+            'Standard_NV24': 4088.0,
+            # NV v3 series
+            'Standard_NV12s_v3': 1022.0,
+            'Standard_NV24s_v3': 2044.0,
+            'Standard_NV48s_v3': 4088.0,
         }
-        # Default to DS1_v2 cost if size not found
-        return costs.get(vm_size, 54.0)
+        if vm_size in costs:
+            return costs[vm_size]
+        # Case-insensitive fallback
+        vm_upper = vm_size.upper()
+        for key, value in costs.items():
+            if key.upper() == vm_upper:
+                return value
+        # Estimate based on GPU vs CPU
+        if self._is_gpu_vm_size(vm_size):
+            return 657.0
+        return 54.0
+
+    def _is_gpu_vm_size(self, vm_size: str) -> bool:
+        """Check if VM size is a GPU instance (NC/ND/NV series)."""
+        prefix = vm_size.replace('Standard_', '').upper()
+        return prefix.startswith(('NC', 'ND', 'NV'))
+
+    def _get_ml_vm_vcores(self, vm_size: str) -> int:
+        """Extract approximate vCPU count from VM size name."""
+        import re
+        name = vm_size.replace('Standard_', '')
+        match = re.search(r'(\d+)', name)
+        return int(match.group(1)) if match else 2
+
+    def _get_ml_recommended_downsize(self, vm_size: str) -> str | None:
+        """Get recommended smaller VM size for ML compute instance."""
+        downsizes = {
+            'Standard_DS4_v2': 'Standard_DS3_v2',
+            'Standard_DS3_v2': 'Standard_DS2_v2',
+            'Standard_DS2_v2': 'Standard_DS1_v2',
+            'Standard_DS12_v2': 'Standard_DS11_v2',
+            'Standard_DS13_v2': 'Standard_DS12_v2',
+            'Standard_DS14_v2': 'Standard_DS13_v2',
+            'Standard_DS15_v2': 'Standard_DS14_v2',
+            'Standard_E16s_v3': 'Standard_E8s_v3',
+            'Standard_E8s_v3': 'Standard_E4s_v3',
+            'Standard_E4s_v3': 'Standard_E2s_v3',
+            'Standard_E32s_v3': 'Standard_E16s_v3',
+            'Standard_E64s_v3': 'Standard_E32s_v3',
+            'Standard_D16s_v3': 'Standard_D8s_v3',
+            'Standard_D8s_v3': 'Standard_D4s_v3',
+            'Standard_D4s_v3': 'Standard_D2s_v3',
+            'Standard_D32s_v3': 'Standard_D16s_v3',
+            'Standard_NC12': 'Standard_NC6',
+            'Standard_NC24': 'Standard_NC12',
+            'Standard_DS5_v2': 'Standard_DS4_v2',
+            'Standard_D8_v2': 'Standard_D4_v2',
+        }
+        return downsizes.get(vm_size)
+
+    async def _list_ml_compute_instances(self, region: str) -> list[dict]:
+        """List all ML Compute Instances across workspaces in a region."""
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.resource import ResourceManagementClient
+        import requests
+
+        instances: list[dict] = []
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            resource_client = ResourceManagementClient(credential, self.subscription_id)
+            token = credential.get_token('https://management.azure.com/.default')
+
+            workspaces = resource_client.resources.list(
+                filter="resourceType eq 'Microsoft.MachineLearningServices/workspaces'"
+            )
+
+            for ws in workspaces:
+                ws_location = ws.location.lower().replace(" ", "") if ws.location else ""
+                target_region = region.lower().replace(" ", "")
+                if ws_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(ws.id):
+                    continue
+
+                parts = ws.id.split('/')
+                rg_name = parts[4] if len(parts) > 4 else None
+                ws_name = parts[-1] if parts else None
+                if not rg_name or not ws_name:
+                    continue
+
+                try:
+                    url = f'https://management.azure.com/subscriptions/{self.subscription_id}/resourceGroups/{rg_name}/providers/Microsoft.MachineLearningServices/workspaces/{ws_name}/computes?api-version=2023-10-01'
+                    headers = {'Authorization': f'Bearer {token.token}'}
+                    response = requests.get(url, headers=headers, timeout=30)
+
+                    if response.status_code != 200:
+                        continue
+
+                    data = response.json()
+                    for compute in data.get('value', []):
+                        props = compute.get('properties', {})
+                        if props.get('computeType') != 'ComputeInstance':
+                            continue
+
+                        compute_props = props.get('properties', {}) or {}
+                        personal = compute_props.get('personalComputeInstanceSettings', {}) or {}
+                        assigned = personal.get('assignedUser', {}) or {}
+
+                        age_days = 0
+                        created_on = compute_props.get('createdOn')
+                        if created_on:
+                            try:
+                                from dateutil import parser
+                                created_date = parser.parse(created_on)
+                                if created_date.tzinfo is None:
+                                    created_date = created_date.replace(tzinfo=timezone.utc)
+                                age_days = (datetime.now(timezone.utc) - created_date).days
+                            except Exception:
+                                age_days = 7
+
+                        instances.append({
+                            'compute_name': compute.get('name'),
+                            'compute_id': compute.get('id'),
+                            'vm_size': compute_props.get('vmSize', 'Standard_DS1_v2'),
+                            'state': compute_props.get('state', 'Unknown'),
+                            'idle_time_before_shutdown': compute_props.get('idleTimeBeforeShutdown'),
+                            'schedules': compute_props.get('schedules', {}),
+                            'created_on': created_on,
+                            'age_days': age_days,
+                            'assigned_user_id': assigned.get('objectId', ''),
+                            'workspace_name': ws_name,
+                            'workspace_id': ws.id,
+                            'resource_group': rg_name,
+                            'location': ws.location,
+                            'compute_props': compute_props,
+                        })
+                except Exception:
+                    continue
+        except Exception as e:
+            print(f"Error listing ML compute instances in {region}: {str(e)}")
+
+        return instances
 
     def _calculate_app_service_cost(self, app) -> float:
         """
@@ -22612,17 +22786,64 @@ class AzureProvider(CloudProviderBase):
         self, region: str, detection_rules: dict | None = None
     ) -> list[OrphanResourceData]:
         """
-        Scan for GPU instances (NC/ND series) with 0% GPU usage.
+        Scan for GPU instances (NC/ND series) potentially running CPU-only workloads.
         SCENARIO 2: ml_compute_instance_gpu_for_cpu_workload - Switch to CPU instance.
 
         Detection Logic:
         - Instance VM size starts with NC/ND/NV (GPU instances)
         - Age > min_age_days (default 14)
-        - Phase 2: GPU utilization < max_gpu_utilization_percent (default 5%)
+        - Instance is Running or Stopped (exists and incurring cost)
 
         Cost Impact: $514/month waste for NC6 (60-80% savings switching to CPU)
         """
-        return []
+        orphans: list[OrphanResourceData] = []
+        min_age_days = detection_rules.get("min_age_days", 14) if detection_rules else 14
+
+        try:
+            instances = await self._list_ml_compute_instances(region)
+
+            for inst in instances:
+                if inst['age_days'] < min_age_days:
+                    continue
+                if inst['state'] not in ('Running', 'Stopped', 'Creating'):
+                    continue
+
+                vm_size = inst['vm_size']
+                if not self._is_gpu_vm_size(vm_size):
+                    continue
+
+                gpu_cost = self._calculate_ml_compute_cost(vm_size)
+                cpu_alternative_cost = self._calculate_ml_compute_cost('Standard_DS3_v2')
+                savings = gpu_cost - cpu_alternative_cost
+
+                metadata = {
+                    'compute_id': inst['compute_id'],
+                    'compute_name': inst['compute_name'],
+                    'workspace_name': inst['workspace_name'],
+                    'resource_group': inst['resource_group'],
+                    'vm_size': vm_size,
+                    'state': inst['state'],
+                    'age_days': inst['age_days'],
+                    'is_gpu_instance': True,
+                    'cpu_alternative': 'Standard_DS3_v2',
+                    'estimated_savings': round(savings, 2),
+                    'orphan_reason': f"GPU instance '{inst['compute_name']}' ({vm_size}) may be running CPU-only workloads",
+                    'recommendation': f'Switch to CPU instance (Standard_DS3_v2) to save ~${savings:.0f}/month if no GPU workloads',
+                    'confidence_level': self._calculate_confidence_level(inst['age_days'], detection_rules),
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='ml_compute_instance_gpu_for_cpu_workload',
+                    resource_id=inst['compute_id'],
+                    resource_name=inst['compute_name'],
+                    region=inst['location'],
+                    estimated_monthly_cost=gpu_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning ML GPU instances in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_ml_compute_instance_stopped_30_days(
         self, region: str, detection_rules: dict | None = None
@@ -22633,12 +22854,53 @@ class AzureProvider(CloudProviderBase):
 
         Detection Logic:
         - Instance in Stopped state
-        - Stopped for > min_stopped_days (default 30)
+        - Age > min_stopped_days (default 30) as proxy for stopped duration
         - Storage costs still accumulating (~10% of runtime cost)
 
         Cost Impact: $22/month storage cost when stopped (consider deletion)
         """
-        return []
+        orphans: list[OrphanResourceData] = []
+        min_stopped_days = detection_rules.get("min_stopped_days", 30) if detection_rules else 30
+
+        try:
+            instances = await self._list_ml_compute_instances(region)
+
+            for inst in instances:
+                if inst['state'] != 'Stopped':
+                    continue
+                if inst['age_days'] < min_stopped_days:
+                    continue
+
+                runtime_cost = self._calculate_ml_compute_cost(inst['vm_size'])
+                storage_cost = round(runtime_cost * 0.10, 2)
+
+                metadata = {
+                    'compute_id': inst['compute_id'],
+                    'compute_name': inst['compute_name'],
+                    'workspace_name': inst['workspace_name'],
+                    'resource_group': inst['resource_group'],
+                    'vm_size': inst['vm_size'],
+                    'state': 'Stopped',
+                    'age_days': inst['age_days'],
+                    'runtime_cost_if_running': runtime_cost,
+                    'storage_cost_while_stopped': storage_cost,
+                    'orphan_reason': f"ML Compute Instance '{inst['compute_name']}' stopped for {inst['age_days']} days, still incurring storage costs",
+                    'recommendation': 'Delete instance if no longer needed to eliminate storage charges',
+                    'confidence_level': 'critical' if inst['age_days'] >= 90 else 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='ml_compute_instance_stopped_30_days',
+                    resource_id=inst['compute_id'],
+                    resource_name=inst['compute_name'],
+                    region=inst['location'],
+                    estimated_monthly_cost=storage_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning stopped ML instances in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_ml_compute_instance_over_provisioned(
         self, region: str, detection_rules: dict | None = None
@@ -22653,9 +22915,102 @@ class AzureProvider(CloudProviderBase):
         - Azure Monitor: Memory < max_memory_utilization_percent (default 40%)
         - Observation period: min_observation_days (default 30)
 
-        Cost Impact: $75/month waste downsizing DS12_v2 → DS3_v2
+        Cost Impact: $75/month waste downsizing DS12_v2 -> DS3_v2
         """
-        return []
+        from datetime import datetime, timedelta, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans: list[OrphanResourceData] = []
+        min_age_days = detection_rules.get("min_age_days", 14) if detection_rules else 14
+        max_cpu = detection_rules.get("max_cpu_utilization_percent", 30) if detection_rules else 30
+        max_memory = detection_rules.get("max_memory_utilization_percent", 40) if detection_rules else 40
+        observation_days = detection_rules.get("min_observation_days", 30) if detection_rules else 30
+
+        try:
+            instances = await self._list_ml_compute_instances(region)
+
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+
+            for inst in instances:
+                if inst['age_days'] < min_age_days:
+                    continue
+                if inst['state'] != 'Running':
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        resource_uri=inst['workspace_id'],
+                        metric_names=["CpuUtilization", "MemoryUtilization"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.AVERAGE],
+                    )
+
+                    avg_cpu = None
+                    avg_memory = None
+                    for metric in response.metrics:
+                        values = []
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.average is not None:
+                                    values.append(dp.average)
+                        if values:
+                            avg_val = sum(values) / len(values)
+                            if 'cpu' in metric.name.lower():
+                                avg_cpu = avg_val
+                            elif 'memory' in metric.name.lower():
+                                avg_memory = avg_val
+
+                    if avg_cpu is None or avg_memory is None:
+                        continue
+                    if avg_cpu >= max_cpu or avg_memory >= max_memory:
+                        continue
+
+                    current_cost = self._calculate_ml_compute_cost(inst['vm_size'])
+                    recommended = self._get_ml_recommended_downsize(inst['vm_size'])
+                    recommended_cost = self._calculate_ml_compute_cost(recommended) if recommended else current_cost * 0.5
+                    savings = current_cost - recommended_cost
+
+                    metadata = {
+                        'compute_id': inst['compute_id'],
+                        'compute_name': inst['compute_name'],
+                        'workspace_name': inst['workspace_name'],
+                        'resource_group': inst['resource_group'],
+                        'vm_size': inst['vm_size'],
+                        'state': inst['state'],
+                        'avg_cpu_percent': round(avg_cpu, 1),
+                        'avg_memory_percent': round(avg_memory, 1),
+                        'observation_days': observation_days,
+                        'recommended_size': recommended or 'smaller SKU',
+                        'estimated_savings': round(savings, 2),
+                        'orphan_reason': f"ML Instance '{inst['compute_name']}' over-provisioned: CPU {avg_cpu:.1f}%, Memory {avg_memory:.1f}%",
+                        'recommendation': f"Downsize from {inst['vm_size']} to {recommended or 'smaller SKU'} to save ~${savings:.0f}/month",
+                        'confidence_level': self._calculate_confidence_level(inst['age_days'], detection_rules),
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='ml_compute_instance_over_provisioned',
+                        resource_id=inst['compute_id'],
+                        resource_name=inst['compute_name'],
+                        region=inst['location'],
+                        estimated_monthly_cost=current_cost,
+                        resource_metadata=metadata
+                    ))
+                except Exception:
+                    continue
+        except Exception as e:
+            print(f"Error scanning over-provisioned ML instances in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_ml_compute_instance_never_accessed(
         self, region: str, detection_rules: dict | None = None
@@ -22665,14 +23020,75 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 5: ml_compute_instance_never_accessed - 100% waste.
 
         Detection Logic:
-        - Instance created but 0 activity in min_age_days (default 60)
-        - Azure ML API: 0 notebook kernels launched
-        - Azure ML API: 0 training jobs submitted
-        - Azure ML API: 0 SSH/JupyterLab connections
+        - Instance created > min_age_days (default 60) ago
+        - Still in 'Creating' or 'Stopped' state (never started or used)
+        - Or Running with no connectivity endpoints active
 
         Cost Impact: $143/month waste for Standard_DS3_v2 (100% waste)
         """
-        return []
+        orphans: list[OrphanResourceData] = []
+        min_age_days = detection_rules.get("min_age_days", 60) if detection_rules else 60
+
+        try:
+            instances = await self._list_ml_compute_instances(region)
+
+            for inst in instances:
+                if inst['age_days'] < min_age_days:
+                    continue
+
+                compute_props = inst.get('compute_props', {})
+
+                # Check for signs of never being accessed
+                connectivity = compute_props.get('connectivityEndpoints', {}) or {}
+                applications = compute_props.get('applications', []) or []
+                last_operation = compute_props.get('lastOperation', {}) or {}
+                last_op_name = last_operation.get('operationName', '')
+
+                # Instance never accessed if:
+                # - State is Stopped and only operation was Create
+                # - Or no connectivity endpoints configured
+                # - Or no applications configured
+                is_never_used = False
+                if inst['state'] == 'Stopped' and last_op_name in ('Create', ''):
+                    is_never_used = True
+                elif inst['state'] == 'Running' and not connectivity and not applications:
+                    is_never_used = True
+                elif inst['state'] == 'Creating':
+                    is_never_used = True
+
+                if not is_never_used:
+                    continue
+
+                monthly_cost = self._calculate_ml_compute_cost(inst['vm_size'])
+
+                metadata = {
+                    'compute_id': inst['compute_id'],
+                    'compute_name': inst['compute_name'],
+                    'workspace_name': inst['workspace_name'],
+                    'resource_group': inst['resource_group'],
+                    'vm_size': inst['vm_size'],
+                    'state': inst['state'],
+                    'age_days': inst['age_days'],
+                    'has_connectivity_endpoints': bool(connectivity),
+                    'has_applications': bool(applications),
+                    'last_operation': last_op_name,
+                    'orphan_reason': f"ML Compute Instance '{inst['compute_name']}' created {inst['age_days']} days ago but never accessed",
+                    'recommendation': 'Delete instance to eliminate 100% waste - instance was never used',
+                    'confidence_level': 'critical' if inst['age_days'] >= 90 else 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='ml_compute_instance_never_accessed',
+                    resource_id=inst['compute_id'],
+                    resource_name=inst['compute_name'],
+                    region=inst['location'],
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning never-accessed ML instances in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_ml_compute_instance_multiple_per_user(
         self, region: str, detection_rules: dict | None = None
@@ -22682,13 +23098,82 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 6: ml_compute_instance_multiple_per_user - Consolidate to 1 instance.
 
         Detection Logic:
-        - Group instances by created_by user/principal
+        - Group instances by assigned user (objectId)
         - Count instances per user >= min_instances_per_user (default 2)
         - Age > min_age_days (default 14)
 
-        Cost Impact: $286/month waste for 2× DS3_v2 (consolidate to 1)
+        Cost Impact: $286/month waste for 2x DS3_v2 (consolidate to 1)
         """
-        return []
+        from collections import defaultdict
+
+        orphans: list[OrphanResourceData] = []
+        min_age_days = detection_rules.get("min_age_days", 14) if detection_rules else 14
+        min_instances = detection_rules.get("min_instances_per_user", 2) if detection_rules else 2
+
+        try:
+            instances = await self._list_ml_compute_instances(region)
+
+            # Group by assigned user
+            user_instances: dict[str, list[dict]] = defaultdict(list)
+            for inst in instances:
+                if inst['age_days'] < min_age_days:
+                    continue
+                user_id = inst.get('assigned_user_id', '')
+                if not user_id:
+                    # Fall back to workspace grouping if no assigned user
+                    user_id = f"ws:{inst['workspace_name']}"
+                user_instances[user_id].append(inst)
+
+            # Flag users with multiple instances
+            for user_id, user_insts in user_instances.items():
+                if len(user_insts) < min_instances:
+                    continue
+
+                # Sort by cost descending - flag all but the most expensive
+                sorted_insts = sorted(
+                    user_insts,
+                    key=lambda x: self._calculate_ml_compute_cost(x['vm_size']),
+                    reverse=True
+                )
+
+                total_cost = sum(self._calculate_ml_compute_cost(i['vm_size']) for i in sorted_insts)
+                keep_cost = self._calculate_ml_compute_cost(sorted_insts[0]['vm_size'])
+                savings = total_cost - keep_cost
+
+                # Flag all instances except the primary one
+                for inst in sorted_insts[1:]:
+                    monthly_cost = self._calculate_ml_compute_cost(inst['vm_size'])
+
+                    metadata = {
+                        'compute_id': inst['compute_id'],
+                        'compute_name': inst['compute_name'],
+                        'workspace_name': inst['workspace_name'],
+                        'resource_group': inst['resource_group'],
+                        'vm_size': inst['vm_size'],
+                        'state': inst['state'],
+                        'age_days': inst['age_days'],
+                        'assigned_user_id': user_id,
+                        'total_user_instances': len(user_insts),
+                        'instance_names': [i['compute_name'] for i in user_insts],
+                        'total_cost_all_instances': round(total_cost, 2),
+                        'estimated_savings': round(savings, 2),
+                        'orphan_reason': f"User has {len(user_insts)} ML instances - '{inst['compute_name']}' may be duplicate",
+                        'recommendation': f'Consolidate to 1 instance to save ~${savings:.0f}/month',
+                        'confidence_level': self._calculate_confidence_level(inst['age_days'], detection_rules),
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='ml_compute_instance_multiple_per_user',
+                        resource_id=inst['compute_id'],
+                        resource_name=inst['compute_name'],
+                        region=inst['location'],
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata=metadata
+                    ))
+        except Exception as e:
+            print(f"Error scanning multiple ML instances per user in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_ml_compute_instance_premium_ssd_unnecessary(
         self, region: str, detection_rules: dict | None = None
@@ -22698,13 +23183,69 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 7: ml_compute_instance_premium_ssd_unnecessary - Save 60% on storage.
 
         Detection Logic:
-        - Instance uses Premium SSD disk SKU
+        - Instance VM size uses Premium storage (DS/GS/Ls series or explicit premium)
+        - Non-GPU workload (CPU instance with premium storage is likely wasteful)
         - Age > min_age_days (default 14)
-        - Azure Monitor: Disk IOPS < max_disk_iops_utilization_percent (default 30%)
 
         Cost Impact: $120/month waste for 1TB Premium vs Standard
         """
-        return []
+        orphans: list[OrphanResourceData] = []
+        min_age_days = detection_rules.get("min_age_days", 14) if detection_rules else 14
+
+        try:
+            instances = await self._list_ml_compute_instances(region)
+
+            # VM sizes that use Premium SSD by default
+            premium_prefixes = ('DS', 'GS', 'Ls', 'Es', 'Fs')
+
+            for inst in instances:
+                if inst['age_days'] < min_age_days:
+                    continue
+                if inst['state'] not in ('Running', 'Stopped'):
+                    continue
+
+                # Check if VM size supports/uses premium storage
+                vm_prefix = inst['vm_size'].replace('Standard_', '')
+                uses_premium = any(vm_prefix.upper().startswith(p.upper()) for p in premium_prefixes)
+
+                if not uses_premium:
+                    continue
+
+                # Skip GPU instances - they likely need premium storage for performance
+                if self._is_gpu_vm_size(inst['vm_size']):
+                    continue
+
+                monthly_cost = self._calculate_ml_compute_cost(inst['vm_size'])
+                # Premium SSD costs ~$120/month more than Standard SSD for 1TB
+                storage_savings = 120.0
+
+                metadata = {
+                    'compute_id': inst['compute_id'],
+                    'compute_name': inst['compute_name'],
+                    'workspace_name': inst['workspace_name'],
+                    'resource_group': inst['resource_group'],
+                    'vm_size': inst['vm_size'],
+                    'state': inst['state'],
+                    'age_days': inst['age_days'],
+                    'uses_premium_storage': True,
+                    'storage_savings': storage_savings,
+                    'orphan_reason': f"ML Instance '{inst['compute_name']}' uses Premium SSD which may be unnecessary for this workload",
+                    'recommendation': 'Switch to Standard SSD to save ~$120/month on storage if high IOPS not required',
+                    'confidence_level': 'medium',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='ml_compute_instance_premium_ssd_unnecessary',
+                    resource_id=inst['compute_id'],
+                    resource_name=inst['compute_name'],
+                    region=inst['location'],
+                    estimated_monthly_cost=storage_savings,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning premium SSD ML instances in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_ml_compute_instance_no_idle_shutdown(
         self, region: str, detection_rules: dict | None = None
@@ -22720,7 +23261,60 @@ class AzureProvider(CloudProviderBase):
 
         Cost Impact: $67/month waste for 4h/day idle during work hours
         """
-        return []
+        orphans: list[OrphanResourceData] = []
+        min_age_days = detection_rules.get("min_age_days", 7) if detection_rules else 7
+
+        try:
+            instances = await self._list_ml_compute_instances(region)
+
+            for inst in instances:
+                if inst['age_days'] < min_age_days:
+                    continue
+                if inst['state'] not in ('Running', 'Stopped', 'Creating'):
+                    continue
+
+                # Check: has schedule shutdown but NO idle shutdown
+                schedules = inst.get('schedules', {}) or {}
+                has_schedule = bool(schedules.get('computeStartStop', []))
+                idle_shutdown = inst.get('idle_time_before_shutdown')
+
+                if not has_schedule:
+                    continue  # No schedule = handled by scenario 1
+                if idle_shutdown:
+                    continue  # Already has idle shutdown
+
+                monthly_cost = self._calculate_ml_compute_cost(inst['vm_size'])
+                # ~4h/day idle during work hours = ~25% waste
+                idle_waste = round(monthly_cost * 0.25, 2)
+
+                metadata = {
+                    'compute_id': inst['compute_id'],
+                    'compute_name': inst['compute_name'],
+                    'workspace_name': inst['workspace_name'],
+                    'resource_group': inst['resource_group'],
+                    'vm_size': inst['vm_size'],
+                    'state': inst['state'],
+                    'age_days': inst['age_days'],
+                    'has_schedule_shutdown': True,
+                    'has_idle_shutdown': False,
+                    'idle_waste_estimate': idle_waste,
+                    'orphan_reason': f"ML Instance '{inst['compute_name']}' has scheduled shutdown but no idle timeout - wastes compute during inactive work hours",
+                    'recommendation': 'Configure idle_time_before_shutdown (e.g. 30 min) to auto-stop during inactivity within work hours',
+                    'confidence_level': 'high' if inst['age_days'] >= 14 else 'medium',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='ml_compute_instance_no_idle_shutdown',
+                    resource_id=inst['compute_id'],
+                    resource_name=inst['compute_name'],
+                    region=inst['location'],
+                    estimated_monthly_cost=idle_waste,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning ML instances without idle shutdown in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_ml_compute_instance_dev_high_performance_sku(
         self, region: str, detection_rules: dict | None = None
@@ -22730,13 +23324,80 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 9: ml_compute_instance_dev_high_performance_sku - Overkill for dev.
 
         Detection Logic:
-        - Instance in dev/test workspace (exclude_environments: prod)
+        - Instance in dev/test workspace or resource group
         - VM size >= min_vcpu_count (default 16 vCPU)
         - Age > min_age_days (default 7)
 
         Cost Impact: $500/month waste for E16s_v3 in dev environment
         """
-        return []
+        orphans: list[OrphanResourceData] = []
+        min_age_days = detection_rules.get("min_age_days", 7) if detection_rules else 7
+        min_vcpu_count = detection_rules.get("min_vcpu_count", 16) if detection_rules else 16
+        dev_keywords = ['dev', 'test', 'staging', 'sandbox', 'poc', 'demo', 'lab', 'trial']
+
+        try:
+            instances = await self._list_ml_compute_instances(region)
+
+            for inst in instances:
+                if inst['age_days'] < min_age_days:
+                    continue
+                if inst['state'] not in ('Running', 'Stopped', 'Creating'):
+                    continue
+
+                # Check if workspace or resource group is dev/test
+                ws_name_lower = inst['workspace_name'].lower()
+                rg_name_lower = inst['resource_group'].lower()
+                compute_name_lower = inst['compute_name'].lower()
+
+                is_dev = any(
+                    kw in name
+                    for kw in dev_keywords
+                    for name in (ws_name_lower, rg_name_lower, compute_name_lower)
+                )
+
+                if not is_dev:
+                    continue
+
+                # Check if VM size is high-performance
+                vcores = self._get_ml_vm_vcores(inst['vm_size'])
+                if vcores < min_vcpu_count:
+                    continue
+
+                current_cost = self._calculate_ml_compute_cost(inst['vm_size'])
+                # Recommend a smaller dev-appropriate SKU
+                dev_sku = 'Standard_DS2_v2'
+                dev_cost = self._calculate_ml_compute_cost(dev_sku)
+                savings = current_cost - dev_cost
+
+                metadata = {
+                    'compute_id': inst['compute_id'],
+                    'compute_name': inst['compute_name'],
+                    'workspace_name': inst['workspace_name'],
+                    'resource_group': inst['resource_group'],
+                    'vm_size': inst['vm_size'],
+                    'state': inst['state'],
+                    'age_days': inst['age_days'],
+                    'vcpu_count': vcores,
+                    'is_dev_environment': True,
+                    'recommended_dev_sku': dev_sku,
+                    'estimated_savings': round(savings, 2),
+                    'orphan_reason': f"High-performance SKU '{inst['vm_size']}' ({vcores} vCPUs) in dev/test environment '{inst['workspace_name']}'",
+                    'recommendation': f'Downsize to {dev_sku} for dev/test to save ~${savings:.0f}/month',
+                    'confidence_level': self._calculate_confidence_level(inst['age_days'], detection_rules),
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='ml_compute_instance_dev_high_performance_sku',
+                    resource_id=inst['compute_id'],
+                    resource_name=inst['compute_name'],
+                    region=inst['location'],
+                    estimated_monthly_cost=current_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning dev high-perf ML instances in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_ml_compute_instance_old_sdk_deprecated_image(
         self, region: str, detection_rules: dict | None = None
@@ -22746,12 +23407,57 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 10: ml_compute_instance_old_sdk_deprecated_image - Security risk.
 
         Detection Logic:
-        - Instance image_version or SDK version age > min_image_age_days (default 365)
-        - Azure ML API: Check instance creation image metadata
+        - Instance created > min_image_age_days (default 365) ago
+        - Uses creation date as proxy for image version age
 
         Cost Impact: Security risk + missing features (update recommended)
         """
-        return []
+        orphans: list[OrphanResourceData] = []
+        min_image_age_days = detection_rules.get("min_image_age_days", 365) if detection_rules else 365
+
+        try:
+            instances = await self._list_ml_compute_instances(region)
+
+            for inst in instances:
+                if inst['age_days'] < min_image_age_days:
+                    continue
+                if inst['state'] not in ('Running', 'Stopped'):
+                    continue
+
+                compute_props = inst.get('compute_props', {})
+                # Check for version info in properties
+                os_image_metadata = compute_props.get('osImageMetadata', {}) or {}
+                image_version = os_image_metadata.get('version', 'unknown')
+
+                monthly_cost = self._calculate_ml_compute_cost(inst['vm_size'])
+
+                metadata = {
+                    'compute_id': inst['compute_id'],
+                    'compute_name': inst['compute_name'],
+                    'workspace_name': inst['workspace_name'],
+                    'resource_group': inst['resource_group'],
+                    'vm_size': inst['vm_size'],
+                    'state': inst['state'],
+                    'age_days': inst['age_days'],
+                    'image_version': image_version,
+                    'created_on': inst.get('created_on', 'unknown'),
+                    'orphan_reason': f"ML Instance '{inst['compute_name']}' created {inst['age_days']} days ago - likely using deprecated SDK/image",
+                    'recommendation': 'Recreate instance with latest image for security patches and new features',
+                    'confidence_level': 'high' if inst['age_days'] >= 730 else 'medium',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='ml_compute_instance_old_sdk_deprecated_image',
+                    resource_id=inst['compute_id'],
+                    resource_name=inst['compute_name'],
+                    region=inst['location'],
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning old SDK ML instances in {region}: {str(e)}")
+
+        return orphans
 
     # Phase 2 - Metrics-based detection (8 scenarios)
 
@@ -22768,7 +23474,88 @@ class AzureProvider(CloudProviderBase):
 
         Cost Impact: $107/month waste (75% reduction downsizing)
         """
-        return []
+        from datetime import datetime, timedelta, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans: list[OrphanResourceData] = []
+        max_cpu = detection_rules.get("max_avg_cpu_percent", 10) if detection_rules else 10
+        observation_days = detection_rules.get("min_observation_days", 30) if detection_rules else 30
+
+        try:
+            instances = await self._list_ml_compute_instances(region)
+
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            metrics_client = MetricsQueryClient(credential)
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+
+            for inst in instances:
+                if inst['state'] != 'Running':
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        resource_uri=inst['workspace_id'],
+                        metric_names=["CpuUtilization"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.AVERAGE],
+                    )
+
+                    avg_cpu = None
+                    for metric in response.metrics:
+                        values = []
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.average is not None:
+                                    values.append(dp.average)
+                        if values:
+                            avg_cpu = sum(values) / len(values)
+
+                    if avg_cpu is None or avg_cpu >= max_cpu:
+                        continue
+
+                    current_cost = self._calculate_ml_compute_cost(inst['vm_size'])
+                    recommended = self._get_ml_recommended_downsize(inst['vm_size'])
+                    recommended_cost = self._calculate_ml_compute_cost(recommended) if recommended else current_cost * 0.25
+                    savings = current_cost - recommended_cost
+
+                    metadata = {
+                        'compute_id': inst['compute_id'],
+                        'compute_name': inst['compute_name'],
+                        'workspace_name': inst['workspace_name'],
+                        'resource_group': inst['resource_group'],
+                        'vm_size': inst['vm_size'],
+                        'state': inst['state'],
+                        'avg_cpu_percent': round(avg_cpu, 1),
+                        'max_cpu_threshold': max_cpu,
+                        'observation_days': observation_days,
+                        'recommended_size': recommended or 'smaller SKU',
+                        'estimated_savings': round(savings, 2),
+                        'orphan_reason': f"ML Instance '{inst['compute_name']}' low CPU: {avg_cpu:.1f}% avg over {observation_days} days",
+                        'recommendation': f"Downsize from {inst['vm_size']} to {recommended or 'smaller SKU'} to save ~${savings:.0f}/month",
+                        'confidence_level': 'high' if avg_cpu < 5 else 'medium',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='ml_compute_instance_low_cpu_utilization',
+                        resource_id=inst['compute_id'],
+                        resource_name=inst['compute_name'],
+                        region=inst['location'],
+                        estimated_monthly_cost=current_cost,
+                        resource_metadata=metadata
+                    ))
+                except Exception:
+                    continue
+        except Exception as e:
+            print(f"Error scanning low CPU ML instances in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_ml_compute_instance_low_gpu_utilization(
         self, region: str, detection_rules: dict | None = None
@@ -22784,7 +23571,90 @@ class AzureProvider(CloudProviderBase):
 
         Cost Impact: $500/month waste for NC6 (60-80% savings)
         """
-        return []
+        from datetime import datetime, timedelta, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans: list[OrphanResourceData] = []
+        max_gpu = detection_rules.get("max_avg_gpu_percent", 15) if detection_rules else 15
+        observation_days = detection_rules.get("min_observation_days", 14) if detection_rules else 14
+
+        try:
+            instances = await self._list_ml_compute_instances(region)
+
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            metrics_client = MetricsQueryClient(credential)
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+
+            for inst in instances:
+                if inst['state'] != 'Running':
+                    continue
+                if not self._is_gpu_vm_size(inst['vm_size']):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        resource_uri=inst['workspace_id'],
+                        metric_names=["GpuUtilization"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.AVERAGE],
+                    )
+
+                    avg_gpu = None
+                    for metric in response.metrics:
+                        values = []
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.average is not None:
+                                    values.append(dp.average)
+                        if values:
+                            avg_gpu = sum(values) / len(values)
+
+                    if avg_gpu is None or avg_gpu >= max_gpu:
+                        continue
+
+                    gpu_cost = self._calculate_ml_compute_cost(inst['vm_size'])
+                    cpu_cost = self._calculate_ml_compute_cost('Standard_DS3_v2')
+                    savings = gpu_cost - cpu_cost
+
+                    metadata = {
+                        'compute_id': inst['compute_id'],
+                        'compute_name': inst['compute_name'],
+                        'workspace_name': inst['workspace_name'],
+                        'resource_group': inst['resource_group'],
+                        'vm_size': inst['vm_size'],
+                        'state': inst['state'],
+                        'avg_gpu_percent': round(avg_gpu, 1),
+                        'max_gpu_threshold': max_gpu,
+                        'observation_days': observation_days,
+                        'is_gpu_instance': True,
+                        'cpu_alternative': 'Standard_DS3_v2',
+                        'estimated_savings': round(savings, 2),
+                        'orphan_reason': f"GPU instance '{inst['compute_name']}' low GPU utilization: {avg_gpu:.1f}% avg over {observation_days} days",
+                        'recommendation': f'Switch to CPU instance (Standard_DS3_v2) to save ~${savings:.0f}/month',
+                        'confidence_level': 'critical' if avg_gpu < 5 else 'high',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='ml_compute_instance_low_gpu_utilization',
+                        resource_id=inst['compute_id'],
+                        resource_name=inst['compute_name'],
+                        region=inst['location'],
+                        estimated_monthly_cost=gpu_cost,
+                        resource_metadata=metadata
+                    ))
+                except Exception:
+                    continue
+        except Exception as e:
+            print(f"Error scanning low GPU ML instances in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_ml_compute_instance_idle_business_hours(
         self, region: str, detection_rules: dict | None = None
@@ -22794,13 +23664,98 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 13: ml_compute_instance_idle_business_hours - Enable auto-shutdown.
 
         Detection Logic:
-        - Azure Monitor: CPU during business_hours_start to business_hours_end
+        - Azure Monitor: CPU during business hours
         - CPU < max_cpu_percent_business_hours (default 5%)
         - Observation period: min_observation_days (default 14)
 
         Cost Impact: $54/month waste (50% savings with auto-shutdown)
         """
-        return []
+        from datetime import datetime, timedelta, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans: list[OrphanResourceData] = []
+        max_cpu = detection_rules.get("max_cpu_percent_business_hours", 5) if detection_rules else 5
+        observation_days = detection_rules.get("min_observation_days", 14) if detection_rules else 14
+
+        try:
+            instances = await self._list_ml_compute_instances(region)
+
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            metrics_client = MetricsQueryClient(credential)
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+
+            for inst in instances:
+                if inst['state'] != 'Running':
+                    continue
+
+                try:
+                    # Query hourly granularity to detect business-hours idle
+                    response = metrics_client.query_resource(
+                        resource_uri=inst['workspace_id'],
+                        metric_names=["CpuUtilization"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(hours=1),
+                        aggregations=[MetricAggregationType.AVERAGE],
+                    )
+
+                    business_hour_values = []
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.average is not None and dp.time_stamp:
+                                    hour = dp.time_stamp.hour
+                                    # Business hours: 9 AM - 5 PM UTC (approximate)
+                                    if 9 <= hour < 17:
+                                        business_hour_values.append(dp.average)
+
+                    if not business_hour_values:
+                        continue
+
+                    avg_business_cpu = sum(business_hour_values) / len(business_hour_values)
+                    if avg_business_cpu >= max_cpu:
+                        continue
+
+                    monthly_cost = self._calculate_ml_compute_cost(inst['vm_size'])
+                    # Idle during business hours = ~50% waste (8h of 16h active)
+                    savings = round(monthly_cost * 0.50, 2)
+
+                    metadata = {
+                        'compute_id': inst['compute_id'],
+                        'compute_name': inst['compute_name'],
+                        'workspace_name': inst['workspace_name'],
+                        'resource_group': inst['resource_group'],
+                        'vm_size': inst['vm_size'],
+                        'state': inst['state'],
+                        'avg_cpu_business_hours': round(avg_business_cpu, 1),
+                        'max_cpu_threshold': max_cpu,
+                        'observation_days': observation_days,
+                        'data_points': len(business_hour_values),
+                        'estimated_savings': savings,
+                        'orphan_reason': f"ML Instance '{inst['compute_name']}' idle during business hours: {avg_business_cpu:.1f}% CPU avg",
+                        'recommendation': 'Configure idle shutdown timeout to auto-stop during inactive work hours',
+                        'confidence_level': 'high' if avg_business_cpu < 2 else 'medium',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='ml_compute_instance_idle_business_hours',
+                        resource_id=inst['compute_id'],
+                        resource_name=inst['compute_name'],
+                        region=inst['location'],
+                        estimated_monthly_cost=savings,
+                        resource_metadata=metadata
+                    ))
+                except Exception:
+                    continue
+        except Exception as e:
+            print(f"Error scanning idle business hours ML instances in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_ml_compute_instance_no_jupyter_activity(
         self, region: str, detection_rules: dict | None = None
@@ -22810,13 +23765,97 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 14: ml_compute_instance_no_jupyter_activity - 100% waste.
 
         Detection Logic:
-        - Azure ML API: 0 Jupyter kernels launched
-        - Azure ML API: 0 notebook opens/saves
-        - Period: min_days_no_notebook_activity (default 30)
+        - Instance Running for > min_days (default 30)
+        - Uses network activity as proxy for Jupyter usage (near-zero = no activity)
+        - Checks last operation timestamp for staleness
 
         Cost Impact: $143/month waste (100% unused)
         """
-        return []
+        from datetime import datetime, timedelta, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans: list[OrphanResourceData] = []
+        min_days = detection_rules.get("min_days_no_notebook_activity", 30) if detection_rules else 30
+        max_network_mb = detection_rules.get("max_network_mb_per_day", 1.0) if detection_rules else 1.0
+
+        try:
+            instances = await self._list_ml_compute_instances(region)
+
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            metrics_client = MetricsQueryClient(credential)
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=min_days)
+
+            for inst in instances:
+                if inst['state'] != 'Running':
+                    continue
+                if inst['age_days'] < min_days:
+                    continue
+
+                try:
+                    # Use network bytes as proxy for Jupyter activity
+                    response = metrics_client.query_resource(
+                        resource_uri=inst['workspace_id'],
+                        metric_names=["NetworkBytesTransmitted", "NetworkBytesReceived"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.TOTAL],
+                    )
+
+                    total_network_bytes = 0.0
+                    data_days = 0
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.total is not None:
+                                    total_network_bytes += dp.total
+                                    data_days += 1
+
+                    if data_days == 0:
+                        # No metric data = likely no activity
+                        avg_network_mb_per_day = 0.0
+                    else:
+                        avg_network_mb_per_day = (total_network_bytes / (1024 * 1024)) / max(data_days // 2, 1)
+
+                    if avg_network_mb_per_day > max_network_mb:
+                        continue
+
+                    monthly_cost = self._calculate_ml_compute_cost(inst['vm_size'])
+
+                    metadata = {
+                        'compute_id': inst['compute_id'],
+                        'compute_name': inst['compute_name'],
+                        'workspace_name': inst['workspace_name'],
+                        'resource_group': inst['resource_group'],
+                        'vm_size': inst['vm_size'],
+                        'state': inst['state'],
+                        'age_days': inst['age_days'],
+                        'avg_network_mb_per_day': round(avg_network_mb_per_day, 3),
+                        'observation_days': min_days,
+                        'orphan_reason': f"ML Instance '{inst['compute_name']}' no Jupyter/notebook activity for {min_days}+ days (network: {avg_network_mb_per_day:.3f} MB/day)",
+                        'recommendation': 'Stop or delete instance - no notebook activity detected',
+                        'confidence_level': 'critical' if avg_network_mb_per_day < 0.01 else 'high',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='ml_compute_instance_no_jupyter_activity',
+                        resource_id=inst['compute_id'],
+                        resource_name=inst['compute_name'],
+                        region=inst['location'],
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata=metadata
+                    ))
+                except Exception:
+                    continue
+        except Exception as e:
+            print(f"Error scanning no-Jupyter ML instances in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_ml_compute_instance_no_training_jobs(
         self, region: str, detection_rules: dict | None = None
@@ -22826,12 +23865,104 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 15: ml_compute_instance_no_training_jobs - Instance unused.
 
         Detection Logic:
-        - Azure ML API: 0 training jobs submitted via SDK
+        - Azure ML REST API: 0 jobs in workspace for the observation period
         - Period: min_days_no_training_jobs (default 30)
 
         Cost Impact: $143/month waste
         """
-        return []
+        from datetime import datetime, timedelta, timezone
+        from azure.identity import ClientSecretCredential
+        import requests
+
+        orphans: list[OrphanResourceData] = []
+        min_days = detection_rules.get("min_days_no_training_jobs", 30) if detection_rules else 30
+
+        try:
+            instances = await self._list_ml_compute_instances(region)
+
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            token = credential.get_token('https://management.azure.com/.default')
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=min_days)
+
+            # Cache workspace job counts to avoid redundant API calls
+            workspace_jobs_cache: dict[str, int] = {}
+
+            for inst in instances:
+                if inst['state'] != 'Running':
+                    continue
+                if inst['age_days'] < min_days:
+                    continue
+
+                ws_key = f"{inst['resource_group']}/{inst['workspace_name']}"
+
+                if ws_key not in workspace_jobs_cache:
+                    try:
+                        url = f"https://management.azure.com/subscriptions/{self.subscription_id}/resourceGroups/{inst['resource_group']}/providers/Microsoft.MachineLearningServices/workspaces/{inst['workspace_name']}/jobs?api-version=2023-10-01"
+                        headers = {'Authorization': f'Bearer {token.token}'}
+                        response = requests.get(url, headers=headers, timeout=30)
+
+                        if response.status_code == 200:
+                            jobs = response.json().get('value', [])
+                            # Count recent jobs
+                            recent_count = 0
+                            for job in jobs:
+                                job_props = job.get('properties', {})
+                                created = job_props.get('creationContext', {}).get('createdAt', '')
+                                if created:
+                                    try:
+                                        from dateutil import parser
+                                        job_date = parser.parse(created)
+                                        if job_date.tzinfo is None:
+                                            job_date = job_date.replace(tzinfo=timezone.utc)
+                                        if job_date >= start_time:
+                                            recent_count += 1
+                                    except Exception:
+                                        pass
+                            workspace_jobs_cache[ws_key] = recent_count
+                        else:
+                            workspace_jobs_cache[ws_key] = -1  # Error marker
+                    except Exception:
+                        workspace_jobs_cache[ws_key] = -1
+
+                job_count = workspace_jobs_cache.get(ws_key, -1)
+                if job_count != 0:
+                    continue  # Has recent jobs or error
+
+                monthly_cost = self._calculate_ml_compute_cost(inst['vm_size'])
+
+                metadata = {
+                    'compute_id': inst['compute_id'],
+                    'compute_name': inst['compute_name'],
+                    'workspace_name': inst['workspace_name'],
+                    'resource_group': inst['resource_group'],
+                    'vm_size': inst['vm_size'],
+                    'state': inst['state'],
+                    'age_days': inst['age_days'],
+                    'recent_jobs_count': 0,
+                    'observation_days': min_days,
+                    'orphan_reason': f"ML Instance '{inst['compute_name']}' - no training jobs submitted in {min_days} days",
+                    'recommendation': 'Stop or delete instance if no training jobs are planned',
+                    'confidence_level': 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='ml_compute_instance_no_training_jobs',
+                    resource_id=inst['compute_id'],
+                    resource_name=inst['compute_name'],
+                    region=inst['location'],
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning no-training-jobs ML instances in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_ml_compute_instance_low_memory_utilization(
         self, region: str, detection_rules: dict | None = None
@@ -22844,9 +23975,90 @@ class AzureProvider(CloudProviderBase):
         - Azure Monitor: Memory < max_avg_memory_percent (default 25%)
         - Observation period: min_observation_days (default 30)
 
-        Cost Impact: $71/month waste (E8s_v3 → E4s_v3)
+        Cost Impact: $71/month waste (E8s_v3 -> E4s_v3)
         """
-        return []
+        from datetime import datetime, timedelta, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans: list[OrphanResourceData] = []
+        max_memory = detection_rules.get("max_avg_memory_percent", 25) if detection_rules else 25
+        observation_days = detection_rules.get("min_observation_days", 30) if detection_rules else 30
+
+        try:
+            instances = await self._list_ml_compute_instances(region)
+
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            metrics_client = MetricsQueryClient(credential)
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+
+            for inst in instances:
+                if inst['state'] != 'Running':
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        resource_uri=inst['workspace_id'],
+                        metric_names=["MemoryUtilization"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.AVERAGE],
+                    )
+
+                    avg_memory = None
+                    for metric in response.metrics:
+                        values = []
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.average is not None:
+                                    values.append(dp.average)
+                        if values:
+                            avg_memory = sum(values) / len(values)
+
+                    if avg_memory is None or avg_memory >= max_memory:
+                        continue
+
+                    current_cost = self._calculate_ml_compute_cost(inst['vm_size'])
+                    recommended = self._get_ml_recommended_downsize(inst['vm_size'])
+                    recommended_cost = self._calculate_ml_compute_cost(recommended) if recommended else current_cost * 0.5
+                    savings = current_cost - recommended_cost
+
+                    metadata = {
+                        'compute_id': inst['compute_id'],
+                        'compute_name': inst['compute_name'],
+                        'workspace_name': inst['workspace_name'],
+                        'resource_group': inst['resource_group'],
+                        'vm_size': inst['vm_size'],
+                        'state': inst['state'],
+                        'avg_memory_percent': round(avg_memory, 1),
+                        'max_memory_threshold': max_memory,
+                        'observation_days': observation_days,
+                        'recommended_size': recommended or 'smaller SKU',
+                        'estimated_savings': round(savings, 2),
+                        'orphan_reason': f"ML Instance '{inst['compute_name']}' low memory: {avg_memory:.1f}% avg over {observation_days} days",
+                        'recommendation': f"Downsize from {inst['vm_size']} to {recommended or 'smaller SKU'} to save ~${savings:.0f}/month",
+                        'confidence_level': 'high' if avg_memory < 10 else 'medium',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='ml_compute_instance_low_memory_utilization',
+                        resource_id=inst['compute_id'],
+                        resource_name=inst['compute_name'],
+                        region=inst['location'],
+                        estimated_monthly_cost=current_cost,
+                        resource_metadata=metadata
+                    ))
+                except Exception:
+                    continue
+        except Exception as e:
+            print(f"Error scanning low memory ML instances in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_ml_compute_instance_network_idle(
         self, region: str, detection_rules: dict | None = None
@@ -22856,12 +24068,95 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 17: ml_compute_instance_network_idle - Instance not doing anything.
 
         Detection Logic:
-        - Azure Monitor: Network bytes in+out < max_network_bytes_per_day (default 1 MB)
+        - Azure Monitor: Network bytes in+out < max_network_mb_per_day (default 1 MB)
         - Observation period: min_observation_days (default 30)
 
         Cost Impact: $143/month waste
         """
-        return []
+        from datetime import datetime, timedelta, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans: list[OrphanResourceData] = []
+        max_network_mb = detection_rules.get("max_network_mb_per_day", 1.0) if detection_rules else 1.0
+        observation_days = detection_rules.get("min_observation_days", 30) if detection_rules else 30
+
+        try:
+            instances = await self._list_ml_compute_instances(region)
+
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            metrics_client = MetricsQueryClient(credential)
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+
+            for inst in instances:
+                if inst['state'] != 'Running':
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        resource_uri=inst['workspace_id'],
+                        metric_names=["NetworkBytesTransmitted", "NetworkBytesReceived"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.TOTAL],
+                    )
+
+                    total_bytes = 0.0
+                    data_days = 0
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.total is not None:
+                                    total_bytes += dp.total
+                                    data_days += 1
+
+                    if data_days == 0:
+                        avg_mb_per_day = 0.0
+                    else:
+                        # data_days counts both metrics, so divide by 2 for actual days
+                        actual_days = max(data_days // 2, 1)
+                        avg_mb_per_day = (total_bytes / (1024 * 1024)) / actual_days
+
+                    if avg_mb_per_day > max_network_mb:
+                        continue
+
+                    monthly_cost = self._calculate_ml_compute_cost(inst['vm_size'])
+
+                    metadata = {
+                        'compute_id': inst['compute_id'],
+                        'compute_name': inst['compute_name'],
+                        'workspace_name': inst['workspace_name'],
+                        'resource_group': inst['resource_group'],
+                        'vm_size': inst['vm_size'],
+                        'state': inst['state'],
+                        'age_days': inst['age_days'],
+                        'avg_network_mb_per_day': round(avg_mb_per_day, 3),
+                        'max_network_threshold_mb': max_network_mb,
+                        'observation_days': observation_days,
+                        'orphan_reason': f"ML Instance '{inst['compute_name']}' network idle: {avg_mb_per_day:.3f} MB/day avg over {observation_days} days",
+                        'recommendation': 'Stop or delete instance - near-zero network activity indicates no usage',
+                        'confidence_level': 'critical' if avg_mb_per_day < 0.01 else 'high',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='ml_compute_instance_network_idle',
+                        resource_id=inst['compute_id'],
+                        resource_name=inst['compute_name'],
+                        region=inst['location'],
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata=metadata
+                    ))
+                except Exception:
+                    continue
+        except Exception as e:
+            print(f"Error scanning network-idle ML instances in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_ml_compute_instance_disk_io_near_zero(
         self, region: str, detection_rules: dict | None = None
@@ -22871,12 +24166,94 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 18: ml_compute_instance_disk_io_near_zero - Instance idle.
 
         Detection Logic:
-        - Azure Monitor: Disk IOPS < max_disk_iops_per_day (default 100)
+        - Azure Monitor: Disk read+write bytes < max_disk_bytes_per_day (default 10 MB)
         - Observation period: min_observation_days (default 30)
 
         Cost Impact: $143/month waste
         """
-        return []
+        from datetime import datetime, timedelta, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans: list[OrphanResourceData] = []
+        max_disk_mb = detection_rules.get("max_disk_mb_per_day", 10.0) if detection_rules else 10.0
+        observation_days = detection_rules.get("min_observation_days", 30) if detection_rules else 30
+
+        try:
+            instances = await self._list_ml_compute_instances(region)
+
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            metrics_client = MetricsQueryClient(credential)
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+
+            for inst in instances:
+                if inst['state'] != 'Running':
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        resource_uri=inst['workspace_id'],
+                        metric_names=["DiskReadBytes", "DiskWriteBytes"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.TOTAL],
+                    )
+
+                    total_disk_bytes = 0.0
+                    data_days = 0
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.total is not None:
+                                    total_disk_bytes += dp.total
+                                    data_days += 1
+
+                    if data_days == 0:
+                        avg_disk_mb_per_day = 0.0
+                    else:
+                        actual_days = max(data_days // 2, 1)
+                        avg_disk_mb_per_day = (total_disk_bytes / (1024 * 1024)) / actual_days
+
+                    if avg_disk_mb_per_day > max_disk_mb:
+                        continue
+
+                    monthly_cost = self._calculate_ml_compute_cost(inst['vm_size'])
+
+                    metadata = {
+                        'compute_id': inst['compute_id'],
+                        'compute_name': inst['compute_name'],
+                        'workspace_name': inst['workspace_name'],
+                        'resource_group': inst['resource_group'],
+                        'vm_size': inst['vm_size'],
+                        'state': inst['state'],
+                        'age_days': inst['age_days'],
+                        'avg_disk_mb_per_day': round(avg_disk_mb_per_day, 3),
+                        'max_disk_threshold_mb': max_disk_mb,
+                        'observation_days': observation_days,
+                        'orphan_reason': f"ML Instance '{inst['compute_name']}' disk I/O near zero: {avg_disk_mb_per_day:.3f} MB/day avg",
+                        'recommendation': 'Stop or delete instance - near-zero disk activity indicates no usage',
+                        'confidence_level': 'critical' if avg_disk_mb_per_day < 0.1 else 'high',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='ml_compute_instance_disk_io_near_zero',
+                        resource_id=inst['compute_id'],
+                        resource_name=inst['compute_name'],
+                        region=inst['location'],
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata=metadata
+                    ))
+                except Exception:
+                    continue
+        except Exception as e:
+            print(f"Error scanning disk-idle ML instances in {region}: {str(e)}")
+
+        return orphans
 
     # ===== Azure App Service (Web Apps) Scanners (18 scenarios - 100% coverage) =====
 
