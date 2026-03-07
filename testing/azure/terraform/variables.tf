@@ -49,3 +49,9 @@ variable "enable_batch_3" {
   type        = bool
   default     = false
 }
+
+variable "enable_batch_4" {
+  description = "Enable Batch 4 resources (Implemented scanners - ~€20/month: Redis, Synapse SQL Pool, Azure Files)"
+  type        = bool
+  default     = false
+}

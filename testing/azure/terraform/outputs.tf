@@ -83,6 +83,24 @@ output "batch_3_resources" {
   } : null
 }
 
+# Batch 4 Outputs
+output "batch_4_resources" {
+  description = "Batch 4 resource IDs and names"
+  value = var.enable_batch_4 ? {
+    # Redis
+    redis_cache_name       = try(azurerm_redis_cache.idle[0].name, null)
+    redis_cache_id         = try(azurerm_redis_cache.idle[0].id, null)
+    redis_hostname         = try(azurerm_redis_cache.idle[0].hostname, null)
+    # Synapse
+    synapse_workspace_name = try(azurerm_synapse_workspace.test[0].name, null)
+    synapse_sql_pool_name  = try(azurerm_synapse_sql_pool.paused[0].name, null)
+    # Azure Files
+    file_share_storage     = try(azurerm_storage_account.file_share[0].name, null)
+    empty_share_name       = try(azurerm_storage_share.empty[0].name, null)
+    oversized_share_name   = try(azurerm_storage_share.over_provisioned[0].name, null)
+  } : null
+}
+
 # Cost Estimation
 output "estimated_monthly_cost" {
   description = "Estimated monthly cost in EUR"
@@ -90,7 +108,8 @@ output "estimated_monthly_cost" {
     batch_1 = var.enable_batch_1 ? 68 : 0
     batch_2 = var.enable_batch_2 ? 71 : 0
     batch_3 = var.enable_batch_3 ? 105 : 0
-    total   = (var.enable_batch_1 ? 68 : 0) + (var.enable_batch_2 ? 71 : 0) + (var.enable_batch_3 ? 105 : 0)
+    batch_4 = var.enable_batch_4 ? 20 : 0
+    total   = (var.enable_batch_1 ? 68 : 0) + (var.enable_batch_2 ? 71 : 0) + (var.enable_batch_3 ? 105 : 0) + (var.enable_batch_4 ? 20 : 0)
   }
 }
 
@@ -131,5 +150,17 @@ output "batch_3_cost_breakdown" {
     azure_ml_compute     = 30  # ML Workspace + Compute Instance (Standard_DS1_v2)
     app_service          = 10  # Service Plan B1 + Web App
     total                = 105
+  } : null
+}
+
+# Detailed Cost Breakdown (Batch 4)
+output "batch_4_cost_breakdown" {
+  description = "Detailed monthly cost breakdown for Batch 4 in EUR"
+  value = var.enable_batch_4 ? {
+    redis_cache_basic_c0  = 15   # Basic C0 tier
+    synapse_sql_pool      = 1    # DW100c paused (storage only)
+    azure_files_storage   = 1    # Storage account + empty file shares
+    synapse_storage       = 1    # Data Lake Gen2 for Synapse workspace
+    total                 = 20   # Estimated ~EUR20/month (conservative)
   } : null
 }
