@@ -332,6 +332,70 @@ class AzureProvider(CloudProviderBase):
 
         return round(base_cost, 2)
 
+    def _calculate_expressroute_circuit_cost(self, bandwidth_mbps: int, sku_tier: str = "Standard", sku_family: str = "MeteredData") -> float:
+        """
+        Calculate monthly cost for an ExpressRoute circuit based on bandwidth and SKU.
+
+        Azure ExpressRoute pricing (approximate, US East 2025):
+        Metered Data plans:
+        - 50 Mbps: $55/month | 100 Mbps: $90/month | 200 Mbps: $190/month
+        - 500 Mbps: $480/month | 1 Gbps: $950/month | 2 Gbps: $1,900/month
+        - 5 Gbps: $4,750/month | 10 Gbps: $6,400/month
+        Unlimited Data plans cost ~1.5-2x metered.
+        Premium tier adds ~60-100% on top of Standard.
+
+        Args:
+            bandwidth_mbps: Circuit bandwidth in Mbps
+            sku_tier: "Standard" or "Premium"
+            sku_family: "MeteredData" or "UnlimitedData"
+
+        Returns:
+            Estimated monthly cost in USD
+        """
+        metered_costs = {
+            50: 55, 100: 90, 200: 190, 500: 480,
+            1000: 950, 2000: 1900, 5000: 4750, 10000: 6400,
+        }
+
+        base_cost = float(metered_costs.get(bandwidth_mbps, 950))
+
+        if sku_family == "UnlimitedData":
+            unlimited_costs = {
+                50: 110, 100: 200, 200: 410, 500: 1050,
+                1000: 1980, 2000: 3960, 5000: 9500, 10000: 13200,
+            }
+            base_cost = float(unlimited_costs.get(bandwidth_mbps, base_cost * 2))
+
+        if sku_tier == "Premium":
+            base_cost *= 1.8
+
+        return round(base_cost, 2)
+
+    def _calculate_expressroute_gateway_cost(self, sku_name: str) -> float:
+        """
+        Calculate monthly cost for an ExpressRoute Virtual Network Gateway based on SKU.
+
+        Azure ExpressRoute Gateway pricing (approximate, US East 2025):
+        - Standard (ErGw1AZ): $139/month
+        - HighPerformance (ErGw2AZ): $685/month
+        - UltraPerformance (ErGw3AZ): $1,367/month
+
+        Args:
+            sku_name: Gateway SKU name
+
+        Returns:
+            Estimated monthly cost in USD
+        """
+        gateway_costs = {
+            "Standard": 139.0,
+            "ErGw1AZ": 139.0,
+            "HighPerformance": 685.0,
+            "ErGw2AZ": 685.0,
+            "UltraPerformance": 1367.0,
+            "ErGw3AZ": 1367.0,
+        }
+        return gateway_costs.get(sku_name, 139.0)
+
     def _get_vm_hourly_cost(self, vm_size: str) -> float:
         """
         Get hourly cost for Azure VM sizes (approximate US East pricing 2025).
@@ -18913,7 +18977,110 @@ class AzureProvider(CloudProviderBase):
         - Metered plan: $55-950/month
         - Unlimited plan: $950-6,400/month
         """
-        return []
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.network import NetworkManagementClient
+
+        orphans = []
+
+        min_not_provisioned_days = detection_rules.get("min_not_provisioned_days", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            )
+            network_client = NetworkManagementClient(credential, self.subscription_id)
+
+            circuits = list(network_client.express_route_circuits.list_all())
+
+            for circuit in circuits:
+                if circuit.location and circuit.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+
+                if not self._is_resource_in_scope(circuit.id):
+                    continue
+
+                if circuit.service_provider_provisioning_state != "NotProvisioned":
+                    continue
+
+                # Calculate age from provisioning state
+                age_days = 0
+                created_time = None
+                if hasattr(circuit, 'etag') and circuit.provisioning_state == "Succeeded":
+                    # Use current time minus min threshold as conservative estimate
+                    age_days = min_not_provisioned_days + 1
+
+                # Check tags for creation date
+                if circuit.tags and circuit.tags.get("created_at"):
+                    try:
+                        created_time = datetime.fromisoformat(circuit.tags["created_at"].replace("Z", "+00:00"))
+                        age_days = (datetime.now(timezone.utc) - created_time).days
+                    except (ValueError, TypeError):
+                        pass
+
+                if age_days < min_not_provisioned_days:
+                    continue
+
+                # Extract bandwidth and calculate cost
+                bandwidth_mbps = 0
+                if circuit.service_provider_properties and circuit.service_provider_properties.bandwidth_in_mbps:
+                    bandwidth_mbps = circuit.service_provider_properties.bandwidth_in_mbps
+
+                sku_tier = circuit.sku.tier if circuit.sku and circuit.sku.tier else "Standard"
+                sku_family = circuit.sku.family if circuit.sku and circuit.sku.family else "MeteredData"
+                monthly_cost = self._calculate_expressroute_circuit_cost(bandwidth_mbps, sku_tier, sku_family)
+
+                already_wasted = round(monthly_cost * (age_days / 30), 2)
+                confidence_level = self._calculate_confidence_level(age_days, detection_rules)
+
+                provider_name = ""
+                peering_location = ""
+                if circuit.service_provider_properties:
+                    provider_name = circuit.service_provider_properties.service_provider_name or ""
+                    peering_location = circuit.service_provider_properties.peering_location or ""
+
+                orphans.append(
+                    OrphanResourceData(
+                        resource_type="expressroute_circuit_not_provisioned",
+                        resource_id=circuit.id,
+                        resource_name=circuit.name,
+                        region=circuit.location,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata={
+                            "service_provider_provisioning_state": circuit.service_provider_provisioning_state,
+                            "circuit_provisioning_state": circuit.circuit_provisioning_state,
+                            "bandwidth_mbps": bandwidth_mbps,
+                            "sku_tier": sku_tier,
+                            "sku_family": sku_family,
+                            "sku_name": circuit.sku.name if circuit.sku else "Standard_MeteredData",
+                            "service_provider": provider_name,
+                            "peering_location": peering_location,
+                            "age_days": age_days,
+                            "monthly_cost_usd": monthly_cost,
+                            "already_wasted": already_wasted,
+                            "total_wasted_usd": already_wasted,
+                            "orphan_reason": (
+                                f"ExpressRoute circuit '{circuit.name}' has ServiceProviderProvisioningState='NotProvisioned' "
+                                f"for {age_days}+ days. The circuit ({bandwidth_mbps} Mbps, {sku_tier}/{sku_family}) "
+                                f"is being billed at ${monthly_cost:.2f}/month but is unusable without provider provisioning. "
+                                f"Provider: {provider_name}, Peering: {peering_location}. Already wasted: ${already_wasted}."
+                            ),
+                            "recommendation": (
+                                f"Contact service provider '{provider_name}' to complete provisioning, or delete this circuit "
+                                f"to save ${monthly_cost:.2f}/month. If the circuit is no longer needed, remove it immediately."
+                            ),
+                            "confidence_level": confidence_level,
+                            "tags": circuit.tags or {},
+                        },
+                    )
+                )
+
+        except Exception as e:
+            print(f"Error scanning ExpressRoute circuits (not provisioned) in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_expressroute_circuit_no_connection(
         self, region: str, detection_rules: dict | None = None
@@ -18931,7 +19098,126 @@ class AzureProvider(CloudProviderBase):
 
         Cost Impact: $950-6,400/month (same as not provisioned)
         """
-        return []
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.network import NetworkManagementClient
+
+        orphans = []
+
+        min_no_connection_days = detection_rules.get("min_no_connection_days", 30) if detection_rules else 30
+        min_age_days = detection_rules.get("min_age_days", 7) if detection_rules else 7
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            )
+            network_client = NetworkManagementClient(credential, self.subscription_id)
+
+            circuits = list(network_client.express_route_circuits.list_all())
+
+            for circuit in circuits:
+                if circuit.location and circuit.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+
+                if not self._is_resource_in_scope(circuit.id):
+                    continue
+
+                # Must be provisioned and enabled
+                if circuit.service_provider_provisioning_state != "Provisioned":
+                    continue
+                if circuit.circuit_provisioning_state != "Enabled":
+                    continue
+
+                # Check if there are any peerings with connections
+                has_connections = False
+                peerings_count = 0
+                if circuit.peerings:
+                    peerings_count = len(circuit.peerings)
+                    for peering in circuit.peerings:
+                        if peering.connections and len(peering.connections) > 0:
+                            has_connections = True
+                            break
+
+                if has_connections:
+                    continue
+
+                # Estimate age
+                age_days = 0
+                if circuit.tags and circuit.tags.get("created_at"):
+                    try:
+                        created_time = datetime.fromisoformat(circuit.tags["created_at"].replace("Z", "+00:00"))
+                        age_days = (datetime.now(timezone.utc) - created_time).days
+                    except (ValueError, TypeError):
+                        age_days = min_no_connection_days + 1
+                else:
+                    age_days = min_no_connection_days + 1
+
+                if age_days < min_age_days:
+                    continue
+
+                # Extract bandwidth and calculate cost
+                bandwidth_mbps = 0
+                if circuit.service_provider_properties and circuit.service_provider_properties.bandwidth_in_mbps:
+                    bandwidth_mbps = circuit.service_provider_properties.bandwidth_in_mbps
+
+                sku_tier = circuit.sku.tier if circuit.sku and circuit.sku.tier else "Standard"
+                sku_family = circuit.sku.family if circuit.sku and circuit.sku.family else "MeteredData"
+                monthly_cost = self._calculate_expressroute_circuit_cost(bandwidth_mbps, sku_tier, sku_family)
+
+                already_wasted = round(monthly_cost * (age_days / 30), 2)
+                confidence_level = self._calculate_confidence_level(age_days, detection_rules)
+
+                provider_name = ""
+                peering_location = ""
+                if circuit.service_provider_properties:
+                    provider_name = circuit.service_provider_properties.service_provider_name or ""
+                    peering_location = circuit.service_provider_properties.peering_location or ""
+
+                orphans.append(
+                    OrphanResourceData(
+                        resource_type="expressroute_circuit_no_connection",
+                        resource_id=circuit.id,
+                        resource_name=circuit.name,
+                        region=circuit.location,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata={
+                            "service_provider_provisioning_state": circuit.service_provider_provisioning_state,
+                            "circuit_provisioning_state": circuit.circuit_provisioning_state,
+                            "bandwidth_mbps": bandwidth_mbps,
+                            "sku_tier": sku_tier,
+                            "sku_family": sku_family,
+                            "sku_name": circuit.sku.name if circuit.sku else "Standard_MeteredData",
+                            "service_provider": provider_name,
+                            "peering_location": peering_location,
+                            "peerings_count": peerings_count,
+                            "connections_count": 0,
+                            "age_days": age_days,
+                            "monthly_cost_usd": monthly_cost,
+                            "already_wasted": already_wasted,
+                            "total_wasted_usd": already_wasted,
+                            "orphan_reason": (
+                                f"ExpressRoute circuit '{circuit.name}' is Provisioned and Enabled but has NO Virtual Network "
+                                f"Gateway connections for {age_days}+ days. The circuit ({bandwidth_mbps} Mbps, {sku_tier}/{sku_family}) "
+                                f"costs ${monthly_cost:.2f}/month but is not connected to any VNet. "
+                                f"Peerings configured: {peerings_count}, connections: 0. Already wasted: ${already_wasted}."
+                            ),
+                            "recommendation": (
+                                f"Connect this circuit to a Virtual Network Gateway to utilize it, or delete it to save "
+                                f"${monthly_cost:.2f}/month. If the circuit was provisioned by mistake or is no longer needed, "
+                                f"decommission it with provider '{provider_name}' and delete the Azure resource."
+                            ),
+                            "confidence_level": confidence_level,
+                            "tags": circuit.tags or {},
+                        },
+                    )
+                )
+
+        except Exception as e:
+            print(f"Error scanning ExpressRoute circuits (no connection) in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_expressroute_gateway_orphaned(
         self, region: str, detection_rules: dict | None = None
@@ -18950,7 +19236,140 @@ class AzureProvider(CloudProviderBase):
         - HighPerformance: $685/month
         - UltraPerformance: $1,367/month
         """
-        return []
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.network import NetworkManagementClient
+        from azure.mgmt.resource import ResourceManagementClient
+
+        orphans = []
+
+        min_age_days = detection_rules.get("min_age_days", 14) if detection_rules else 14
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            )
+            network_client = NetworkManagementClient(credential, self.subscription_id)
+            resource_client = ResourceManagementClient(credential, self.subscription_id)
+
+            # List all VNet gateways across subscription using Resource Manager
+            gateway_resources = resource_client.resources.list(
+                filter="resourceType eq 'Microsoft.Network/virtualNetworkGateways'"
+            )
+
+            for gw_resource in gateway_resources:
+                if not self._is_resource_in_scope(gw_resource.id):
+                    continue
+
+                # Filter by region
+                gw_location = gw_resource.location.lower().replace(" ", "") if gw_resource.location else ""
+                target_region = region.lower().replace(" ", "")
+                if gw_location != target_region:
+                    continue
+
+                # Extract resource group name
+                rg_name = gw_resource.id.split("/resourceGroups/")[1].split("/")[0] if "/resourceGroups/" in gw_resource.id else None
+                if not rg_name:
+                    continue
+
+                # Get full gateway details
+                try:
+                    gateway = network_client.virtual_network_gateways.get(rg_name, gw_resource.name)
+                except Exception:
+                    continue
+
+                # Only target ExpressRoute gateways
+                if not gateway.gateway_type or gateway.gateway_type != "ExpressRoute":
+                    continue
+
+                # Check for connections by listing connections in the resource group
+                has_connections = False
+                try:
+                    connections = list(
+                        network_client.virtual_network_gateway_connections.list(rg_name)
+                    )
+                    for conn in connections:
+                        if conn.virtual_network_gateway1 and conn.virtual_network_gateway1.id == gateway.id:
+                            has_connections = True
+                            break
+                except Exception:
+                    pass
+
+                if has_connections:
+                    continue
+
+                # Estimate age
+                age_days = 0
+                if gateway.tags and gateway.tags.get("created_at"):
+                    try:
+                        created_time = datetime.fromisoformat(gateway.tags["created_at"].replace("Z", "+00:00"))
+                        age_days = (datetime.now(timezone.utc) - created_time).days
+                    except (ValueError, TypeError):
+                        age_days = min_age_days + 1
+                else:
+                    age_days = min_age_days + 1
+
+                if age_days < min_age_days:
+                    continue
+
+                sku_name = gateway.sku.name if gateway.sku else "Standard"
+                sku_tier = gateway.sku.tier if gateway.sku and hasattr(gateway.sku, 'tier') else sku_name
+                monthly_cost = self._calculate_expressroute_gateway_cost(sku_name)
+
+                already_wasted = round(monthly_cost * (age_days / 30), 2)
+                confidence_level = self._calculate_confidence_level(age_days, detection_rules)
+
+                # Extract VNet info from IP configurations
+                vnet_name = ""
+                subnet_id = ""
+                if gateway.ip_configurations:
+                    for ip_config in gateway.ip_configurations:
+                        if ip_config.subnet and ip_config.subnet.id:
+                            subnet_id = ip_config.subnet.id
+                            if "/virtualNetworks/" in subnet_id:
+                                vnet_name = subnet_id.split("/virtualNetworks/")[1].split("/")[0]
+                            break
+
+                orphans.append(
+                    OrphanResourceData(
+                        resource_type="expressroute_gateway_orphaned",
+                        resource_id=gateway.id,
+                        resource_name=gateway.name,
+                        region=gateway.location,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata={
+                            "gateway_type": "ExpressRoute",
+                            "sku_name": sku_name,
+                            "sku_tier": sku_tier,
+                            "vnet_name": vnet_name,
+                            "subnet_id": subnet_id,
+                            "connections_count": 0,
+                            "age_days": age_days,
+                            "monthly_cost_usd": monthly_cost,
+                            "already_wasted": already_wasted,
+                            "total_wasted_usd": already_wasted,
+                            "orphan_reason": (
+                                f"ExpressRoute Gateway '{gateway.name}' (SKU: {sku_name}) has 0 circuit connections. "
+                                f"The gateway costs ${monthly_cost:.2f}/month but is not attached to any ExpressRoute circuit. "
+                                f"VNet: {vnet_name or 'Unknown'}. Age: {age_days}+ days. Already wasted: ${already_wasted}."
+                            ),
+                            "recommendation": (
+                                f"Connect an ExpressRoute circuit to this gateway, or delete the gateway to save "
+                                f"${monthly_cost:.2f}/month. ExpressRoute gateways without circuits serve no purpose "
+                                f"and should be removed if no connectivity is planned."
+                            ),
+                            "confidence_level": confidence_level,
+                            "tags": gateway.tags or {},
+                        },
+                    )
+                )
+
+        except Exception as e:
+            print(f"Error scanning ExpressRoute gateways (orphaned) in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_expressroute_circuit_underutilized(
         self, region: str, detection_rules: dict | None = None
@@ -18959,7 +19378,7 @@ class AzureProvider(CloudProviderBase):
         Scan for ExpressRoute circuits with bandwidth utilization <10% for 30 days.
         SCENARIO 4: expressroute_circuit_underutilized - Over-provisioned (downgrade opportunity).
 
-        Detection Logic (Azure Monitor Metrics - Phase 2):
+        Detection Logic (Azure Monitor Metrics):
         - Azure Monitor: BitsInPerSecond + BitsOutPerSecond / bandwidth capacity
         - Utilization < max_utilization_threshold (default 10%)
         - Observation: min_underutilized_days (default 30)
@@ -18974,7 +19393,187 @@ class AzureProvider(CloudProviderBase):
         - 5 Gbps: $4,750/month
         - 10 Gbps: $6,400/month (Unlimited plan)
         """
-        return []
+        from datetime import datetime, timedelta, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.network import NetworkManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans = []
+
+        max_utilization_threshold = detection_rules.get("max_utilization_threshold", 10) if detection_rules else 10
+        min_underutilized_days = detection_rules.get("min_underutilized_days", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            )
+            network_client = NetworkManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            circuits = list(network_client.express_route_circuits.list_all())
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=min_underutilized_days)
+
+            for circuit in circuits:
+                if circuit.location and circuit.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+
+                if not self._is_resource_in_scope(circuit.id):
+                    continue
+
+                # Only check provisioned and enabled circuits
+                if circuit.service_provider_provisioning_state != "Provisioned":
+                    continue
+                if circuit.circuit_provisioning_state != "Enabled":
+                    continue
+
+                # Get bandwidth capacity
+                bandwidth_mbps = 0
+                if circuit.service_provider_properties and circuit.service_provider_properties.bandwidth_in_mbps:
+                    bandwidth_mbps = circuit.service_provider_properties.bandwidth_in_mbps
+
+                if bandwidth_mbps <= 0:
+                    continue
+
+                # Skip lowest tier - cannot downgrade further
+                if bandwidth_mbps <= 50:
+                    continue
+
+                bandwidth_bps = bandwidth_mbps * 1_000_000  # Convert Mbps to bps
+
+                try:
+                    # Query BitsInPerSecond metric
+                    bits_in_response = metrics_client.query_resource(
+                        resource_uri=circuit.id,
+                        metric_names=["BitsInPerSecond"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(hours=1),
+                        aggregations=[MetricAggregationType.AVERAGE],
+                    )
+
+                    avg_bits_in_values = []
+                    if bits_in_response.metrics and len(bits_in_response.metrics) > 0:
+                        metric = bits_in_response.metrics[0]
+                        if metric.timeseries and len(metric.timeseries) > 0:
+                            for data_point in metric.timeseries[0].data:
+                                if data_point.average is not None:
+                                    avg_bits_in_values.append(data_point.average)
+
+                    # Query BitsOutPerSecond metric
+                    bits_out_response = metrics_client.query_resource(
+                        resource_uri=circuit.id,
+                        metric_names=["BitsOutPerSecond"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(hours=1),
+                        aggregations=[MetricAggregationType.AVERAGE],
+                    )
+
+                    avg_bits_out_values = []
+                    if bits_out_response.metrics and len(bits_out_response.metrics) > 0:
+                        metric = bits_out_response.metrics[0]
+                        if metric.timeseries and len(metric.timeseries) > 0:
+                            for data_point in metric.timeseries[0].data:
+                                if data_point.average is not None:
+                                    avg_bits_out_values.append(data_point.average)
+
+                    # Calculate average utilization
+                    avg_bits_in = sum(avg_bits_in_values) / len(avg_bits_in_values) if avg_bits_in_values else 0.0
+                    avg_bits_out = sum(avg_bits_out_values) / len(avg_bits_out_values) if avg_bits_out_values else 0.0
+                    peak_bits = max(avg_bits_in, avg_bits_out)
+                    utilization_pct = (peak_bits / bandwidth_bps) * 100 if bandwidth_bps > 0 else 0.0
+
+                    if utilization_pct >= max_utilization_threshold:
+                        continue
+
+                except Exception as metrics_error:
+                    print(f"Warning: Cannot query metrics for ExpressRoute {circuit.name}: {str(metrics_error)}")
+                    continue
+
+                # Determine recommended bandwidth based on actual usage
+                recommended_bandwidths = [50, 100, 200, 500, 1000, 2000, 5000, 10000]
+                peak_mbps = peak_bits / 1_000_000
+                # Recommend tier that gives at least 2x headroom over peak usage
+                recommended_mbps = bandwidth_mbps
+                for bw in recommended_bandwidths:
+                    if bw >= peak_mbps * 2 and bw < bandwidth_mbps:
+                        recommended_mbps = bw
+                        break
+
+                sku_tier = circuit.sku.tier if circuit.sku and circuit.sku.tier else "Standard"
+                sku_family = circuit.sku.family if circuit.sku and circuit.sku.family else "MeteredData"
+                current_cost = self._calculate_expressroute_circuit_cost(bandwidth_mbps, sku_tier, sku_family)
+                recommended_cost = self._calculate_expressroute_circuit_cost(recommended_mbps, sku_tier, sku_family)
+                potential_savings = round(current_cost - recommended_cost, 2)
+
+                if potential_savings <= 0:
+                    continue
+
+                confidence_level = "high" if utilization_pct < 5 else "medium"
+                if min_underutilized_days >= 60:
+                    confidence_level = "critical" if utilization_pct < 5 else "high"
+
+                provider_name = ""
+                peering_location = ""
+                if circuit.service_provider_properties:
+                    provider_name = circuit.service_provider_properties.service_provider_name or ""
+                    peering_location = circuit.service_provider_properties.peering_location or ""
+
+                orphans.append(
+                    OrphanResourceData(
+                        resource_type="expressroute_circuit_underutilized",
+                        resource_id=circuit.id,
+                        resource_name=circuit.name,
+                        region=circuit.location,
+                        estimated_monthly_cost=potential_savings,
+                        resource_metadata={
+                            "service_provider_provisioning_state": circuit.service_provider_provisioning_state,
+                            "circuit_provisioning_state": circuit.circuit_provisioning_state,
+                            "bandwidth_mbps": bandwidth_mbps,
+                            "recommended_bandwidth_mbps": recommended_mbps,
+                            "sku_tier": sku_tier,
+                            "sku_family": sku_family,
+                            "sku_name": circuit.sku.name if circuit.sku else "Standard_MeteredData",
+                            "service_provider": provider_name,
+                            "peering_location": peering_location,
+                            "metrics": {
+                                "observation_period_days": min_underutilized_days,
+                                "avg_bits_in_per_second": round(avg_bits_in, 2),
+                                "avg_bits_out_per_second": round(avg_bits_out, 2),
+                                "peak_utilization_mbps": round(peak_mbps, 2),
+                                "utilization_percent": round(utilization_pct, 2),
+                                "threshold_percent": max_utilization_threshold,
+                                "data_points_in": len(avg_bits_in_values),
+                                "data_points_out": len(avg_bits_out_values),
+                            },
+                            "current_cost_usd": current_cost,
+                            "recommended_cost_usd": recommended_cost,
+                            "monthly_cost_usd": current_cost,
+                            "potential_savings_usd": potential_savings,
+                            "orphan_reason": (
+                                f"ExpressRoute circuit '{circuit.name}' ({bandwidth_mbps} Mbps) is underutilized at "
+                                f"{utilization_pct:.1f}% over {min_underutilized_days} days. Peak usage: {peak_mbps:.1f} Mbps. "
+                                f"Current cost: ${current_cost:.2f}/month. Recommended downgrade to {recommended_mbps} Mbps "
+                                f"at ${recommended_cost:.2f}/month. Potential savings: ${potential_savings:.2f}/month."
+                            ),
+                            "recommendation": (
+                                f"Downgrade this circuit from {bandwidth_mbps} Mbps to {recommended_mbps} Mbps to save "
+                                f"${potential_savings:.2f}/month ({((potential_savings/current_cost)*100):.0f}% reduction). "
+                                f"Contact provider '{provider_name}' to coordinate bandwidth change. "
+                                f"Current utilization is only {utilization_pct:.1f}% - well below the {max_utilization_threshold}% threshold."
+                            ),
+                            "confidence_level": confidence_level,
+                            "tags": circuit.tags or {},
+                        },
+                    )
+                )
+
+        except Exception as e:
+            print(f"Error scanning ExpressRoute circuits (underutilized) in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_vpn_gateway_disconnected(
         self, region: str, detection_rules: dict | None = None
