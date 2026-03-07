@@ -17468,7 +17468,8 @@ class AzureProvider(CloudProviderBase):
         app_id: str,
         metric_name: str,
         time_range: timedelta,
-        aggregation: str = "Average"
+        aggregation: str = "Average",
+        metrics_client: Any | None = None,
     ) -> dict[str, Any]:
         """
         Query Azure Monitor metrics for Container Apps.
@@ -17478,16 +17479,24 @@ class AzureProvider(CloudProviderBase):
             metric_name: Metric name (e.g., "UsageNanoCores", "WorkingSetBytes", "Requests", "Replicas")
             time_range: Time range for metric query
             aggregation: Metric aggregation type ("Average", "Total", "Count")
+            metrics_client: Pre-initialized MetricsQueryClient (optional)
 
         Returns:
             Dict with metric data including average, total, count values
         """
         try:
             from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+            from azure.identity import ClientSecretCredential
             from datetime import datetime, timezone
 
-            # Create metrics client
-            metrics_client = MetricsQueryClient(self.credential)
+            # Create metrics client if not provided
+            if metrics_client is None:
+                credential = ClientSecretCredential(
+                    tenant_id=self.tenant_id,
+                    client_id=self.client_id,
+                    client_secret=self.client_secret,
+                )
+                metrics_client = MetricsQueryClient(credential)
 
             # Map aggregation string to enum
             aggregation_map = {
@@ -17597,9 +17606,92 @@ class AzureProvider(CloudProviderBase):
 
         Cost Impact: $39.42-$146/month (Consumption 0.5 vCPU+1GiB to D4 Dedicated)
         """
-        # TODO: Full implementation - Requires azure-mgmt-app package
-        # Placeholder: Returns empty list to avoid breaking existing scans
-        return []
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.appcontainers import ContainerAppsAPIClient
+
+        orphans = []
+        min_stopped_days = detection_rules.get("min_stopped_days", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            )
+            client = ContainerAppsAPIClient(credential, self.subscription_id)
+
+            for app in client.container_apps.list_by_subscription():
+                app_location = app.location.lower().replace(" ", "") if app.location else ""
+                if app_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(app.id):
+                    continue
+
+                # Check if fully stopped (both min and max = 0)
+                template = app.template
+                if not template or not template.scale:
+                    continue
+
+                min_replicas = template.scale.min_replicas or 0
+                max_replicas = template.scale.max_replicas or 0
+
+                if not (min_replicas == 0 and max_replicas == 0):
+                    continue
+
+                # Calculate age
+                age_days = 0
+                if hasattr(app, 'system_data') and app.system_data and app.system_data.created_at:
+                    created_at = app.system_data.created_at
+                    if created_at.tzinfo is None:
+                        created_at = created_at.replace(tzinfo=timezone.utc)
+                    age_days = (datetime.now(timezone.utc) - created_at).days
+
+                if age_days < min_stopped_days:
+                    continue
+
+                monthly_cost = self._calculate_container_app_cost(app)
+                env_id = app.managed_environment_id or ""
+                env_name = env_id.split("/")[-1] if env_id else "Unknown"
+                confidence_level = self._calculate_confidence_level(age_days, detection_rules)
+                already_wasted = round(monthly_cost * (age_days / 30), 2)
+
+                orphans.append(
+                    OrphanResourceData(
+                        resource_type="container_app_stopped",
+                        resource_id=app.id,
+                        resource_name=app.name,
+                        region=app.location,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata={
+                            "app_id": app.id,
+                            "app_name": app.name,
+                            "environment_name": env_name,
+                            "min_replicas": min_replicas,
+                            "max_replicas": max_replicas,
+                            "age_days": age_days,
+                            "monthly_cost_usd": monthly_cost,
+                            "already_wasted": already_wasted,
+                            "total_wasted_usd": already_wasted,
+                            "orphan_reason": (
+                                f"Container App '{app.name}' is fully stopped (minReplicas=0, maxReplicas=0) "
+                                f"for {age_days}+ days. Environment: {env_name}. "
+                                f"Cost: ${monthly_cost:.2f}/month. Already wasted: ${already_wasted}."
+                            ),
+                            "recommendation": (
+                                f"Delete this Container App to save ${monthly_cost:.2f}/month, "
+                                f"or restart it if still needed."
+                            ),
+                            "confidence_level": confidence_level,
+                            "tags": dict(app.tags) if app.tags else {},
+                        },
+                    )
+                )
+
+        except Exception as e:
+            print(f"Error scanning stopped Container Apps in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_container_app_zero_replicas(
         self, region: str, detection_rules: dict | None = None
@@ -17743,7 +17835,134 @@ class AzureProvider(CloudProviderBase):
 
         Cost Impact: $67-$1,089/month savings (migrate Dedicated → Consumption)
         """
-        return []
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.appcontainers import ContainerAppsAPIClient
+
+        orphans = []
+        max_utilization_percent = detection_rules.get("max_utilization_percent", 50) if detection_rules else 50
+
+        dedicated_capacity = {
+            "D4": {"vcpu": 4, "memory_gib": 16, "cost": 146.0},
+            "D8": {"vcpu": 8, "memory_gib": 32, "cost": 292.0},
+            "D16": {"vcpu": 16, "memory_gib": 64, "cost": 584.0},
+            "D32": {"vcpu": 32, "memory_gib": 128, "cost": 1168.0},
+        }
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            )
+            client = ContainerAppsAPIClient(credential, self.subscription_id)
+
+            # List all managed environments
+            environments = list(client.managed_environments.list_by_subscription())
+
+            for env in environments:
+                env_location = env.location.lower().replace(" ", "") if env.location else ""
+                if env_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(env.id):
+                    continue
+
+                # Check workload profiles
+                if not env.workload_profiles:
+                    continue
+
+                for profile in env.workload_profiles:
+                    profile_type = profile.workload_profile_type if profile.workload_profile_type else ""
+                    if profile_type not in dedicated_capacity:
+                        continue  # Skip Consumption profiles
+
+                    capacity = dedicated_capacity[profile_type]
+                    profile_count = profile.minimum_count or 1
+
+                    total_profile_vcpu = capacity["vcpu"] * profile_count
+                    total_profile_memory = capacity["memory_gib"] * profile_count
+                    total_profile_cost = capacity["cost"] * profile_count
+
+                    # Count apps in this environment and their resource allocation
+                    rg_name = env.id.split("/resourceGroups/")[1].split("/")[0] if "/resourceGroups/" in env.id else None
+                    total_allocated_vcpu = 0.0
+                    total_allocated_memory = 0.0
+                    app_count = 0
+
+                    if rg_name:
+                        try:
+                            apps = list(client.container_apps.list_by_resource_group(rg_name))
+                            for app in apps:
+                                if app.managed_environment_id and app.managed_environment_id == env.id:
+                                    app_count += 1
+                                    if app.template and app.template.containers:
+                                        for container in app.template.containers:
+                                            if container.resources:
+                                                total_allocated_vcpu += float(container.resources.cpu or 0.25)
+                                                mem_str = container.resources.memory or "0.5Gi"
+                                                total_allocated_memory += float(mem_str.replace("Gi", ""))
+                        except Exception:
+                            pass
+
+                    utilization_vcpu = (total_allocated_vcpu / total_profile_vcpu * 100) if total_profile_vcpu > 0 else 0
+                    utilization_memory = (total_allocated_memory / total_profile_memory * 100) if total_profile_memory > 0 else 0
+                    max_util = max(utilization_vcpu, utilization_memory)
+
+                    if max_util >= max_utilization_percent:
+                        continue
+
+                    # Calculate Consumption equivalent cost
+                    consumption_cost = self._calculate_container_app_monthly_cost(total_allocated_vcpu, total_allocated_memory)
+                    potential_savings = round(total_profile_cost - consumption_cost, 2)
+
+                    if potential_savings <= 0:
+                        continue
+
+                    orphans.append(
+                        OrphanResourceData(
+                            resource_type="container_app_unnecessary_premium_tier",
+                            resource_id=env.id,
+                            resource_name=f"{env.name}/{profile.name}",
+                            region=env.location,
+                            estimated_monthly_cost=potential_savings,
+                            resource_metadata={
+                                "environment_id": env.id,
+                                "environment_name": env.name,
+                                "profile_name": profile.name,
+                                "profile_type": profile_type,
+                                "profile_count": profile_count,
+                                "total_profile_vcpu": total_profile_vcpu,
+                                "total_profile_memory_gib": total_profile_memory,
+                                "allocated_vcpu": round(total_allocated_vcpu, 2),
+                                "allocated_memory_gib": round(total_allocated_memory, 2),
+                                "utilization_vcpu_percent": round(utilization_vcpu, 1),
+                                "utilization_memory_percent": round(utilization_memory, 1),
+                                "app_count": app_count,
+                                "current_cost_usd": total_profile_cost,
+                                "consumption_equivalent_usd": round(consumption_cost, 2),
+                                "potential_savings_usd": potential_savings,
+                                "orphan_reason": (
+                                    f"Dedicated profile '{profile.name}' ({profile_type} x{profile_count}) in environment "
+                                    f"'{env.name}' is {max_util:.0f}% utilized ({app_count} apps). "
+                                    f"Allocated: {total_allocated_vcpu:.1f} vCPU / {total_allocated_memory:.1f} GiB of "
+                                    f"{total_profile_vcpu} vCPU / {total_profile_memory} GiB. "
+                                    f"Cost: ${total_profile_cost:.2f}/month vs ${consumption_cost:.2f}/month on Consumption."
+                                ),
+                                "recommendation": (
+                                    f"Migrate from Dedicated {profile_type} to Consumption plan to save "
+                                    f"${potential_savings:.2f}/month. Utilization is only {max_util:.0f}% - "
+                                    f"Consumption plan is more cost-effective for this workload."
+                                ),
+                                "confidence_level": "high" if max_util < 25 else "medium",
+                                "tags": dict(env.tags) if env.tags else {},
+                            },
+                        )
+                    )
+
+        except Exception as e:
+            print(f"Error scanning Container App premium tiers in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_container_app_dev_zone_redundancy(
         self, region: str, detection_rules: dict | None = None
@@ -17759,23 +17978,170 @@ class AzureProvider(CloudProviderBase):
 
         Cost Impact: $19.71/month savings (25% overhead removal)
         """
-        return []
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.appcontainers import ContainerAppsAPIClient
+
+        orphans = []
+        dev_tags = detection_rules.get("dev_tags", ["dev", "test", "staging", "sandbox", "qa"]) if detection_rules else ["dev", "test", "staging", "sandbox", "qa"]
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            )
+            client = ContainerAppsAPIClient(credential, self.subscription_id)
+
+            for env in client.managed_environments.list_by_subscription():
+                env_location = env.location.lower().replace(" ", "") if env.location else ""
+                if env_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(env.id):
+                    continue
+
+                # Check zone redundancy
+                if not getattr(env, 'zone_redundant', False):
+                    continue
+
+                # Check if dev/test environment
+                is_dev = False
+                env_name_lower = (env.name or "").lower()
+                for tag in dev_tags:
+                    if tag in env_name_lower:
+                        is_dev = True
+                        break
+
+                if not is_dev and env.tags:
+                    env_tag = (env.tags.get("environment", "") or "").lower()
+                    for tag in dev_tags:
+                        if tag in env_tag:
+                            is_dev = True
+                            break
+
+                if not is_dev:
+                    continue
+
+                # Estimate zone redundancy cost overhead (~25% of base)
+                base_cost = 78.83  # Consumption plan base
+                zone_overhead = round(base_cost * 0.25, 2)
+
+                orphans.append(
+                    OrphanResourceData(
+                        resource_type="container_app_dev_zone_redundancy",
+                        resource_id=env.id,
+                        resource_name=env.name,
+                        region=env.location,
+                        estimated_monthly_cost=zone_overhead,
+                        resource_metadata={
+                            "environment_id": env.id,
+                            "environment_name": env.name,
+                            "zone_redundant": True,
+                            "detected_as": "dev/test",
+                            "monthly_overhead_usd": zone_overhead,
+                            "orphan_reason": (
+                                f"Container Apps environment '{env.name}' has zone redundancy enabled but appears "
+                                f"to be a dev/test environment. Zone redundancy adds ~25% cost (${zone_overhead:.2f}/month)."
+                            ),
+                            "recommendation": (
+                                f"Disable zone redundancy for this dev/test environment to save ~${zone_overhead:.2f}/month. "
+                                f"Zone redundancy is only needed for production high-availability requirements."
+                            ),
+                            "confidence_level": "medium",
+                            "tags": dict(env.tags) if env.tags else {},
+                        },
+                    )
+                )
+
+        except Exception as e:
+            print(f"Error scanning Container App zone redundancy in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_container_app_no_ingress_configured(
         self, region: str, detection_rules: dict | None = None
     ) -> list[OrphanResourceData]:
         """
-        Scan for Container Apps without ingress configured.
+        Scan for Container Apps without ingress configured running >60 days.
         SCENARIO 5: container_app_no_ingress_configured - Backend-only workloads.
 
         Detection Logic:
-        - App with no ingress OR internal-only ingress
+        - App with no ingress configured
         - Running for >60 days
-        - Should consider Azure Functions or Container Instances Jobs
+        - Consider if Azure Functions or Container Instances Jobs fit better
 
         Cost Impact: $78.83/month (use Functions Consumption instead)
         """
-        return []
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.appcontainers import ContainerAppsAPIClient
+
+        orphans = []
+        min_age_days = detection_rules.get("min_age_days", 60) if detection_rules else 60
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            )
+            client = ContainerAppsAPIClient(credential, self.subscription_id)
+
+            for app in client.container_apps.list_by_subscription():
+                app_location = app.location.lower().replace(" ", "") if app.location else ""
+                if app_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(app.id):
+                    continue
+
+                # Check if no ingress configured
+                if app.configuration and app.configuration.ingress:
+                    continue  # Has ingress - skip
+
+                # Calculate age
+                age_days = 0
+                if hasattr(app, 'system_data') and app.system_data and app.system_data.created_at:
+                    created_at = app.system_data.created_at
+                    if created_at.tzinfo is None:
+                        created_at = created_at.replace(tzinfo=timezone.utc)
+                    age_days = (datetime.now(timezone.utc) - created_at).days
+
+                if age_days < min_age_days:
+                    continue
+
+                monthly_cost = self._calculate_container_app_cost(app)
+                confidence_level = self._calculate_confidence_level(age_days, detection_rules)
+
+                orphans.append(
+                    OrphanResourceData(
+                        resource_type="container_app_no_ingress_configured",
+                        resource_id=app.id,
+                        resource_name=app.name,
+                        region=app.location,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata={
+                            "app_id": app.id,
+                            "app_name": app.name,
+                            "has_ingress": False,
+                            "age_days": age_days,
+                            "monthly_cost_usd": monthly_cost,
+                            "orphan_reason": (
+                                f"Container App '{app.name}' has no ingress configured and has been running "
+                                f"for {age_days} days. This is a backend-only workload costing ${monthly_cost:.2f}/month."
+                            ),
+                            "recommendation": (
+                                f"Consider migrating to Azure Functions (Consumption) or Container Instances Jobs "
+                                f"for backend workloads without HTTP ingress. Potential savings: ${monthly_cost:.2f}/month."
+                            ),
+                            "confidence_level": confidence_level,
+                            "tags": dict(app.tags) if app.tags else {},
+                        },
+                    )
+                )
+
+        except Exception as e:
+            print(f"Error scanning Container Apps without ingress in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_container_app_empty_environment(
         self, region: str, detection_rules: dict | None = None
@@ -17792,7 +18158,107 @@ class AzureProvider(CloudProviderBase):
 
         Cost Impact: $146/month (D4) to $1,168/month (D32) waste
         """
-        return []
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.appcontainers import ContainerAppsAPIClient
+
+        orphans = []
+        min_empty_days = detection_rules.get("min_empty_days", 30) if detection_rules else 30
+
+        dedicated_costs = {
+            "D4": 146.0, "D8": 292.0, "D16": 584.0, "D32": 1168.0,
+        }
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            )
+            client = ContainerAppsAPIClient(credential, self.subscription_id)
+
+            # Build a map of environment_id → app count
+            env_app_count: dict[str, int] = {}
+            for app in client.container_apps.list_by_subscription():
+                env_id = app.managed_environment_id or ""
+                if env_id:
+                    env_app_count[env_id] = env_app_count.get(env_id, 0) + 1
+
+            for env in client.managed_environments.list_by_subscription():
+                env_location = env.location.lower().replace(" ", "") if env.location else ""
+                if env_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(env.id):
+                    continue
+
+                app_count = env_app_count.get(env.id, 0)
+                if app_count > 0:
+                    continue  # Has apps, not empty
+
+                # Calculate age
+                age_days = 0
+                if hasattr(env, 'system_data') and env.system_data and env.system_data.created_at:
+                    created_at = env.system_data.created_at
+                    if created_at.tzinfo is None:
+                        created_at = created_at.replace(tzinfo=timezone.utc)
+                    age_days = (datetime.now(timezone.utc) - created_at).days
+
+                if age_days < min_empty_days:
+                    continue
+
+                # Calculate cost (Dedicated profiles if any, else Consumption base)
+                monthly_cost = 0.0
+                profile_details = []
+                if env.workload_profiles:
+                    for profile in env.workload_profiles:
+                        ptype = profile.workload_profile_type or ""
+                        if ptype in dedicated_costs:
+                            count = profile.minimum_count or 1
+                            profile_cost = dedicated_costs[ptype] * count
+                            monthly_cost += profile_cost
+                            profile_details.append(f"{ptype} x{count} (${profile_cost:.0f}/month)")
+
+                if monthly_cost == 0:
+                    monthly_cost = 10.0  # Consumption environment base cost
+
+                already_wasted = round(monthly_cost * (age_days / 30), 2)
+                confidence_level = self._calculate_confidence_level(age_days, detection_rules)
+
+                orphans.append(
+                    OrphanResourceData(
+                        resource_type="container_app_empty_environment",
+                        resource_id=env.id,
+                        resource_name=env.name,
+                        region=env.location,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata={
+                            "environment_id": env.id,
+                            "environment_name": env.name,
+                            "app_count": 0,
+                            "workload_profiles": profile_details,
+                            "age_days": age_days,
+                            "monthly_cost_usd": monthly_cost,
+                            "already_wasted": already_wasted,
+                            "total_wasted_usd": already_wasted,
+                            "orphan_reason": (
+                                f"Container Apps Environment '{env.name}' has 0 apps deployed for {age_days}+ days. "
+                                f"{'Dedicated profiles: ' + ', '.join(profile_details) + '.' if profile_details else 'Consumption plan.'} "
+                                f"Cost: ${monthly_cost:.2f}/month. Already wasted: ${already_wasted}."
+                            ),
+                            "recommendation": (
+                                f"Delete this empty environment to save ${monthly_cost:.2f}/month. "
+                                f"No Container Apps are deployed in this environment."
+                            ),
+                            "confidence_level": confidence_level,
+                            "tags": dict(env.tags) if env.tags else {},
+                        },
+                    )
+                )
+
+        except Exception as e:
+            print(f"Error scanning empty Container App environments in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_container_app_unused_revision(
         self, region: str, detection_rules: dict | None = None
@@ -17809,7 +18275,84 @@ class AzureProvider(CloudProviderBase):
 
         Cost Impact: Minimal direct cost, mainly hygiene/complexity
         """
-        return []
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.appcontainers import ContainerAppsAPIClient
+
+        orphans = []
+        max_inactive_revisions = detection_rules.get("max_inactive_revisions", 5) if detection_rules else 5
+        min_revision_age_days = detection_rules.get("min_revision_age_days", 90) if detection_rules else 90
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            )
+            client = ContainerAppsAPIClient(credential, self.subscription_id)
+
+            for app in client.container_apps.list_by_subscription():
+                app_location = app.location.lower().replace(" ", "") if app.location else ""
+                if app_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(app.id):
+                    continue
+
+                rg_name = app.id.split("/resourceGroups/")[1].split("/")[0] if "/resourceGroups/" in app.id else None
+                if not rg_name:
+                    continue
+
+                try:
+                    revisions = list(client.container_apps_revisions.list_revisions(rg_name, app.name))
+                except Exception:
+                    continue
+
+                old_inactive = []
+                for rev in revisions:
+                    if getattr(rev, 'active', True):
+                        continue
+                    if hasattr(rev, 'created_time') and rev.created_time:
+                        created = rev.created_time
+                        if created.tzinfo is None:
+                            created = created.replace(tzinfo=timezone.utc)
+                        rev_age = (datetime.now(timezone.utc) - created).days
+                        if rev_age >= min_revision_age_days:
+                            old_inactive.append({"name": rev.name, "age_days": rev_age})
+
+                if len(old_inactive) <= max_inactive_revisions:
+                    continue
+
+                orphans.append(
+                    OrphanResourceData(
+                        resource_type="container_app_unused_revision",
+                        resource_id=app.id,
+                        resource_name=app.name,
+                        region=app.location,
+                        estimated_monthly_cost=0.0,
+                        resource_metadata={
+                            "app_id": app.id,
+                            "app_name": app.name,
+                            "inactive_revision_count": len(old_inactive),
+                            "oldest_revision_age_days": max(r["age_days"] for r in old_inactive),
+                            "threshold": max_inactive_revisions,
+                            "orphan_reason": (
+                                f"Container App '{app.name}' has {len(old_inactive)} inactive revisions "
+                                f"older than {min_revision_age_days} days (threshold: {max_inactive_revisions})."
+                            ),
+                            "recommendation": (
+                                f"Clean up old inactive revisions to reduce complexity and improve management. "
+                                f"Deactivate revisions with: az containerapp revision deactivate."
+                            ),
+                            "confidence_level": "low",
+                            "tags": dict(app.tags) if app.tags else {},
+                        },
+                    )
+                )
+
+        except Exception as e:
+            print(f"Error scanning Container App revisions in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_container_app_overprovisioned_cpu_memory(
         self, region: str, detection_rules: dict | None = None
@@ -17820,13 +18363,125 @@ class AzureProvider(CloudProviderBase):
 
         Detection Logic:
         - Get allocated CPU/memory from container resources
-        - Compare to Azure Monitor metrics (if available)
+        - Compare to Azure Monitor metrics (UsageNanoCores, WorkingSetBytes)
         - Allocation / Usage >= 3 → Over-provisioned
-        - Heuristic: Alert if allocated > 2 vCPU or > 4 GiB
 
         Cost Impact: $118.24/month savings (rightsizing)
         """
-        return []
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.appcontainers import ContainerAppsAPIClient
+        from azure.monitor.query import MetricsQueryClient
+
+        orphans = []
+        min_overprovisioned_ratio = detection_rules.get("min_overprovisioned_ratio", 3.0) if detection_rules else 3.0
+        monitoring_days = detection_rules.get("monitoring_days", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            )
+            client = ContainerAppsAPIClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            for app in client.container_apps.list_by_subscription():
+                app_location = app.location.lower().replace(" ", "") if app.location else ""
+                if app_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(app.id):
+                    continue
+
+                # Get allocated resources
+                allocated_vcpu = 0.0
+                allocated_memory_gib = 0.0
+                if app.template and app.template.containers:
+                    for container in app.template.containers:
+                        if container.resources:
+                            allocated_vcpu += float(container.resources.cpu or 0.25)
+                            mem_str = container.resources.memory or "0.5Gi"
+                            allocated_memory_gib += float(mem_str.replace("Gi", ""))
+
+                if allocated_vcpu <= 0.25 and allocated_memory_gib <= 0.5:
+                    continue  # Already at minimum
+
+                # Query actual usage metrics
+                cpu_metrics = await self._get_container_app_metrics(
+                    app.id, "UsageNanoCores", timedelta(days=monitoring_days), "Average", metrics_client
+                )
+                memory_metrics = await self._get_container_app_metrics(
+                    app.id, "WorkingSetBytes", timedelta(days=monitoring_days), "Average", metrics_client
+                )
+
+                if cpu_metrics["count"] == 0 and memory_metrics["count"] == 0:
+                    continue
+
+                # Convert nanocores → vCPU, bytes → GiB
+                avg_vcpu_used = cpu_metrics["average"] / 1_000_000_000 if cpu_metrics["average"] > 0 else 0.0
+                avg_memory_used_gib = memory_metrics["average"] / (1024 ** 3) if memory_metrics["average"] > 0 else 0.0
+
+                cpu_ratio = allocated_vcpu / avg_vcpu_used if avg_vcpu_used > 0 else float('inf')
+                memory_ratio = allocated_memory_gib / avg_memory_used_gib if avg_memory_used_gib > 0 else float('inf')
+
+                is_cpu_over = cpu_ratio >= min_overprovisioned_ratio and allocated_vcpu > 0.25
+                is_memory_over = memory_ratio >= min_overprovisioned_ratio and allocated_memory_gib > 0.5
+
+                if not (is_cpu_over or is_memory_over):
+                    continue
+
+                # Calculate recommended resources (2x actual usage for headroom)
+                rec_vcpu = max(0.25, round(avg_vcpu_used * 2, 2)) if is_cpu_over else allocated_vcpu
+                rec_memory = max(0.5, round(avg_memory_used_gib * 2, 1)) if is_memory_over else allocated_memory_gib
+
+                current_cost = self._calculate_container_app_monthly_cost(allocated_vcpu, allocated_memory_gib)
+                recommended_cost = self._calculate_container_app_monthly_cost(rec_vcpu, rec_memory)
+                potential_savings = round(current_cost - recommended_cost, 2)
+
+                if potential_savings <= 0:
+                    continue
+
+                orphans.append(
+                    OrphanResourceData(
+                        resource_type="container_app_overprovisioned_cpu_memory",
+                        resource_id=app.id,
+                        resource_name=app.name,
+                        region=app.location,
+                        estimated_monthly_cost=potential_savings,
+                        resource_metadata={
+                            "app_id": app.id,
+                            "app_name": app.name,
+                            "allocated_vcpu": allocated_vcpu,
+                            "allocated_memory_gib": allocated_memory_gib,
+                            "avg_vcpu_used": round(avg_vcpu_used, 4),
+                            "avg_memory_used_gib": round(avg_memory_used_gib, 2),
+                            "cpu_ratio": round(cpu_ratio, 1) if cpu_ratio != float('inf') else "N/A",
+                            "memory_ratio": round(memory_ratio, 1) if memory_ratio != float('inf') else "N/A",
+                            "recommended_vcpu": rec_vcpu,
+                            "recommended_memory_gib": rec_memory,
+                            "current_cost_usd": round(current_cost, 2),
+                            "recommended_cost_usd": round(recommended_cost, 2),
+                            "potential_savings_usd": potential_savings,
+                            "orphan_reason": (
+                                f"Container App '{app.name}' is over-provisioned: allocated {allocated_vcpu} vCPU / "
+                                f"{allocated_memory_gib} GiB but uses avg {avg_vcpu_used:.3f} vCPU / {avg_memory_used_gib:.2f} GiB. "
+                                f"CPU ratio: {cpu_ratio:.1f}x, Memory ratio: {memory_ratio:.1f}x. "
+                                f"Savings: ${potential_savings:.2f}/month by rightsizing."
+                            ),
+                            "recommendation": (
+                                f"Reduce resources from {allocated_vcpu} vCPU / {allocated_memory_gib} GiB to "
+                                f"{rec_vcpu} vCPU / {rec_memory} GiB to save ${potential_savings:.2f}/month."
+                            ),
+                            "confidence_level": "high" if min(cpu_ratio, memory_ratio) >= 5 else "medium",
+                            "tags": dict(app.tags) if app.tags else {},
+                        },
+                    )
+                )
+
+        except Exception as e:
+            print(f"Error scanning over-provisioned Container Apps in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_container_app_custom_domain_unused(
         self, region: str, detection_rules: dict | None = None
@@ -17837,29 +18492,185 @@ class AzureProvider(CloudProviderBase):
 
         Detection Logic:
         - App with custom domains configured
-        - Query Azure Monitor "Requests" metric filtered by hostname
+        - Query Azure Monitor "Requests" metric
         - Requests < max_requests_threshold (default 10) over 60 days
 
         Cost Impact: Custom domain free, but certificate costs if external
         """
-        return []
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.appcontainers import ContainerAppsAPIClient
+        from azure.monitor.query import MetricsQueryClient
+
+        orphans = []
+        monitoring_days = detection_rules.get("monitoring_days", 60) if detection_rules else 60
+        max_requests_threshold = detection_rules.get("max_requests_threshold", 10) if detection_rules else 10
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            )
+            client = ContainerAppsAPIClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            for app in client.container_apps.list_by_subscription():
+                app_location = app.location.lower().replace(" ", "") if app.location else ""
+                if app_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(app.id):
+                    continue
+
+                # Check for custom domains
+                custom_domains = []
+                if app.configuration and app.configuration.ingress and app.configuration.ingress.custom_domains:
+                    custom_domains = list(app.configuration.ingress.custom_domains)
+
+                if not custom_domains:
+                    continue
+
+                # Query total requests
+                req_metrics = await self._get_container_app_metrics(
+                    app.id, "Requests", timedelta(days=monitoring_days), "Total", metrics_client
+                )
+
+                if req_metrics["total"] > max_requests_threshold:
+                    continue
+
+                domain_names = [d.name for d in custom_domains if hasattr(d, 'name')]
+
+                orphans.append(
+                    OrphanResourceData(
+                        resource_type="container_app_custom_domain_unused",
+                        resource_id=app.id,
+                        resource_name=app.name,
+                        region=app.location,
+                        estimated_monthly_cost=0.0,
+                        resource_metadata={
+                            "app_id": app.id,
+                            "app_name": app.name,
+                            "custom_domains": domain_names,
+                            "domain_count": len(custom_domains),
+                            "total_requests": int(req_metrics["total"]),
+                            "monitoring_days": monitoring_days,
+                            "orphan_reason": (
+                                f"Container App '{app.name}' has {len(custom_domains)} custom domain(s) "
+                                f"({', '.join(domain_names[:3])}) but only {int(req_metrics['total'])} requests "
+                                f"over {monitoring_days} days."
+                            ),
+                            "recommendation": (
+                                f"Remove unused custom domains and associated certificates. "
+                                f"If the domains are no longer needed, clean them up to reduce attack surface."
+                            ),
+                            "confidence_level": "medium",
+                            "tags": dict(app.tags) if app.tags else {},
+                        },
+                    )
+                )
+
+        except Exception as e:
+            print(f"Error scanning Container App custom domains in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_container_app_secrets_unused(
         self, region: str, detection_rules: dict | None = None
     ) -> list[OrphanResourceData]:
         """
-        Scan for secrets defined but not referenced.
+        Scan for secrets defined but not referenced in container env vars.
         SCENARIO 10: container_app_secrets_unused - Security hygiene.
 
         Detection Logic:
         - List secrets for each app
         - Check secret references in containers (env vars)
-        - Check Dapr component references
         - Unreferenced secrets = security risk
 
         Cost Impact: No direct cost, security hygiene
         """
-        return []
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.appcontainers import ContainerAppsAPIClient
+
+        orphans = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            )
+            client = ContainerAppsAPIClient(credential, self.subscription_id)
+
+            for app in client.container_apps.list_by_subscription():
+                app_location = app.location.lower().replace(" ", "") if app.location else ""
+                if app_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(app.id):
+                    continue
+
+                # Get defined secrets
+                defined_secrets = set()
+                if app.configuration and app.configuration.secrets:
+                    for secret in app.configuration.secrets:
+                        if secret.name:
+                            defined_secrets.add(secret.name)
+
+                if not defined_secrets:
+                    continue
+
+                # Get referenced secrets from container env vars
+                referenced_secrets = set()
+                if app.template and app.template.containers:
+                    for container in app.template.containers:
+                        if container.env:
+                            for env_var in container.env:
+                                if env_var.secret_ref:
+                                    referenced_secrets.add(env_var.secret_ref)
+
+                # Also check volume mounts for secret references
+                if app.template and app.template.volumes:
+                    for volume in app.template.volumes:
+                        if hasattr(volume, 'secrets') and volume.secrets:
+                            for secret_item in volume.secrets:
+                                if hasattr(secret_item, 'secret_ref') and secret_item.secret_ref:
+                                    referenced_secrets.add(secret_item.secret_ref)
+
+                unused_secrets = defined_secrets - referenced_secrets
+                if not unused_secrets:
+                    continue
+
+                orphans.append(
+                    OrphanResourceData(
+                        resource_type="container_app_secrets_unused",
+                        resource_id=app.id,
+                        resource_name=app.name,
+                        region=app.location,
+                        estimated_monthly_cost=0.0,
+                        resource_metadata={
+                            "app_id": app.id,
+                            "app_name": app.name,
+                            "defined_secrets_count": len(defined_secrets),
+                            "referenced_secrets_count": len(referenced_secrets),
+                            "unused_secrets": list(unused_secrets),
+                            "unused_count": len(unused_secrets),
+                            "orphan_reason": (
+                                f"Container App '{app.name}' has {len(unused_secrets)} unreferenced secret(s): "
+                                f"{', '.join(list(unused_secrets)[:5])}. "
+                                f"Defined: {len(defined_secrets)}, Referenced: {len(referenced_secrets)}."
+                            ),
+                            "recommendation": (
+                                f"Remove unused secrets to improve security posture. "
+                                f"Unreferenced secrets increase the attack surface unnecessarily."
+                            ),
+                            "confidence_level": "low",
+                            "tags": dict(app.tags) if app.tags else {},
+                        },
+                    )
+                )
+
+        except Exception as e:
+            print(f"Error scanning Container App secrets in {region}: {str(e)}")
+
+        return orphans
 
     # ===================================
     # AZURE CONTAINER APPS - Phase 2 Scanners (6 scenarios with Azure Monitor)
@@ -17880,7 +18691,95 @@ class AzureProvider(CloudProviderBase):
 
         Cost Impact: $94.60/month savings (75% reduction: 2 vCPU → 0.5 vCPU)
         """
-        return []
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.appcontainers import ContainerAppsAPIClient
+        from azure.monitor.query import MetricsQueryClient
+
+        orphans = []
+        max_cpu_utilization = detection_rules.get("max_cpu_utilization_percent", 15.0) if detection_rules else 15.0
+        monitoring_days = detection_rules.get("monitoring_days", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            )
+            client = ContainerAppsAPIClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            for app in client.container_apps.list_by_subscription():
+                app_location = app.location.lower().replace(" ", "") if app.location else ""
+                if app_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(app.id):
+                    continue
+
+                # Get allocated CPU
+                allocated_vcpu = 0.0
+                if app.template and app.template.containers:
+                    for container in app.template.containers:
+                        if container.resources:
+                            allocated_vcpu += float(container.resources.cpu or 0.25)
+
+                if allocated_vcpu <= 0.25:
+                    continue  # Already at minimum
+
+                cpu_metrics = await self._get_container_app_metrics(
+                    app.id, "UsageNanoCores", timedelta(days=monitoring_days), "Average", metrics_client
+                )
+
+                if cpu_metrics["count"] == 0:
+                    continue
+
+                avg_vcpu_used = cpu_metrics["average"] / 1_000_000_000
+                cpu_utilization = (avg_vcpu_used / allocated_vcpu) * 100 if allocated_vcpu > 0 else 0
+
+                if cpu_utilization >= max_cpu_utilization:
+                    continue
+
+                # Recommend half the current allocation (with 0.25 minimum)
+                rec_vcpu = max(0.25, round(allocated_vcpu / 2, 2))
+                current_cpu_cost = allocated_vcpu * 63.07  # per vCPU/month
+                recommended_cpu_cost = rec_vcpu * 63.07
+                savings = round(current_cpu_cost - recommended_cpu_cost, 2)
+
+                if savings <= 0:
+                    continue
+
+                orphans.append(
+                    OrphanResourceData(
+                        resource_type="container_app_low_cpu_utilization",
+                        resource_id=app.id,
+                        resource_name=app.name,
+                        region=app.location,
+                        estimated_monthly_cost=savings,
+                        resource_metadata={
+                            "app_id": app.id,
+                            "app_name": app.name,
+                            "allocated_vcpu": allocated_vcpu,
+                            "avg_vcpu_used": round(avg_vcpu_used, 4),
+                            "cpu_utilization_percent": round(cpu_utilization, 1),
+                            "recommended_vcpu": rec_vcpu,
+                            "monitoring_days": monitoring_days,
+                            "potential_savings_usd": savings,
+                            "orphan_reason": (
+                                f"Container App '{app.name}' CPU utilization is {cpu_utilization:.1f}% "
+                                f"(avg {avg_vcpu_used:.3f} vCPU of {allocated_vcpu} allocated) over {monitoring_days} days."
+                            ),
+                            "recommendation": (
+                                f"Reduce CPU from {allocated_vcpu} to {rec_vcpu} vCPU to save ${savings:.2f}/month."
+                            ),
+                            "confidence_level": "high" if cpu_utilization < 5 else "medium",
+                            "tags": dict(app.tags) if app.tags else {},
+                        },
+                    )
+                )
+
+        except Exception as e:
+            print(f"Error scanning Container App CPU utilization in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_container_app_low_memory_utilization(
         self, region: str, detection_rules: dict | None = None
@@ -17897,7 +18796,94 @@ class AzureProvider(CloudProviderBase):
 
         Cost Impact: $23.64/month savings (75% reduction: 4 GiB → 1 GiB)
         """
-        return []
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.appcontainers import ContainerAppsAPIClient
+        from azure.monitor.query import MetricsQueryClient
+
+        orphans = []
+        max_memory_utilization = detection_rules.get("max_memory_utilization_percent", 20.0) if detection_rules else 20.0
+        monitoring_days = detection_rules.get("monitoring_days", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            )
+            client = ContainerAppsAPIClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            for app in client.container_apps.list_by_subscription():
+                app_location = app.location.lower().replace(" ", "") if app.location else ""
+                if app_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(app.id):
+                    continue
+
+                # Get allocated memory
+                allocated_memory_gib = 0.0
+                if app.template and app.template.containers:
+                    for container in app.template.containers:
+                        if container.resources and container.resources.memory:
+                            allocated_memory_gib += float(container.resources.memory.replace("Gi", ""))
+
+                if allocated_memory_gib <= 0.5:
+                    continue  # Already at minimum
+
+                memory_metrics = await self._get_container_app_metrics(
+                    app.id, "WorkingSetBytes", timedelta(days=monitoring_days), "Average", metrics_client
+                )
+
+                if memory_metrics["count"] == 0:
+                    continue
+
+                avg_memory_gib = memory_metrics["average"] / (1024 ** 3)
+                memory_utilization = (avg_memory_gib / allocated_memory_gib) * 100 if allocated_memory_gib > 0 else 0
+
+                if memory_utilization >= max_memory_utilization:
+                    continue
+
+                rec_memory = max(0.5, round(allocated_memory_gib / 2, 1))
+                current_mem_cost = allocated_memory_gib * 7.88
+                recommended_mem_cost = rec_memory * 7.88
+                savings = round(current_mem_cost - recommended_mem_cost, 2)
+
+                if savings <= 0:
+                    continue
+
+                orphans.append(
+                    OrphanResourceData(
+                        resource_type="container_app_low_memory_utilization",
+                        resource_id=app.id,
+                        resource_name=app.name,
+                        region=app.location,
+                        estimated_monthly_cost=savings,
+                        resource_metadata={
+                            "app_id": app.id,
+                            "app_name": app.name,
+                            "allocated_memory_gib": allocated_memory_gib,
+                            "avg_memory_used_gib": round(avg_memory_gib, 2),
+                            "memory_utilization_percent": round(memory_utilization, 1),
+                            "recommended_memory_gib": rec_memory,
+                            "monitoring_days": monitoring_days,
+                            "potential_savings_usd": savings,
+                            "orphan_reason": (
+                                f"Container App '{app.name}' memory utilization is {memory_utilization:.1f}% "
+                                f"(avg {avg_memory_gib:.2f} GiB of {allocated_memory_gib} allocated) over {monitoring_days} days."
+                            ),
+                            "recommendation": (
+                                f"Reduce memory from {allocated_memory_gib} to {rec_memory} GiB to save ${savings:.2f}/month."
+                            ),
+                            "confidence_level": "high" if memory_utilization < 10 else "medium",
+                            "tags": dict(app.tags) if app.tags else {},
+                        },
+                    )
+                )
+
+        except Exception as e:
+            print(f"Error scanning Container App memory utilization in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_container_app_zero_http_requests(
         self, region: str, detection_rules: dict | None = None
@@ -17913,7 +18899,93 @@ class AzureProvider(CloudProviderBase):
 
         Cost Impact: $78.83/month waste (100% - app not used)
         """
-        return []
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.appcontainers import ContainerAppsAPIClient
+        from azure.monitor.query import MetricsQueryClient
+
+        orphans = []
+        monitoring_days = detection_rules.get("monitoring_days", 60) if detection_rules else 60
+        max_requests_threshold = detection_rules.get("max_requests_threshold", 100) if detection_rules else 100
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            )
+            client = ContainerAppsAPIClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            for app in client.container_apps.list_by_subscription():
+                app_location = app.location.lower().replace(" ", "") if app.location else ""
+                if app_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(app.id):
+                    continue
+
+                # Only check apps with ingress (HTTP-capable)
+                if not (app.configuration and app.configuration.ingress):
+                    continue
+
+                req_metrics = await self._get_container_app_metrics(
+                    app.id, "Requests", timedelta(days=monitoring_days), "Total", metrics_client
+                )
+
+                if req_metrics["count"] == 0:
+                    continue  # No metric data
+
+                total_requests = int(req_metrics["total"])
+
+                if total_requests > max_requests_threshold:
+                    continue
+
+                monthly_cost = self._calculate_container_app_cost(app)
+                age_days = monitoring_days
+                if hasattr(app, 'system_data') and app.system_data and app.system_data.created_at:
+                    created_at = app.system_data.created_at
+                    if created_at.tzinfo is None:
+                        created_at = created_at.replace(tzinfo=timezone.utc)
+                    age_days = (datetime.now(timezone.utc) - created_at).days
+
+                already_wasted = round(monthly_cost * (monitoring_days / 30), 2)
+
+                orphans.append(
+                    OrphanResourceData(
+                        resource_type="container_app_zero_http_requests",
+                        resource_id=app.id,
+                        resource_name=app.name,
+                        region=app.location,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata={
+                            "app_id": app.id,
+                            "app_name": app.name,
+                            "total_requests": total_requests,
+                            "monitoring_days": monitoring_days,
+                            "threshold": max_requests_threshold,
+                            "age_days": age_days,
+                            "monthly_cost_usd": monthly_cost,
+                            "already_wasted": already_wasted,
+                            "total_wasted_usd": already_wasted,
+                            "orphan_reason": (
+                                f"Container App '{app.name}' received only {total_requests} HTTP requests "
+                                f"over {monitoring_days} days (threshold: {max_requests_threshold}). "
+                                f"Cost: ${monthly_cost:.2f}/month. Already wasted: ${already_wasted}."
+                            ),
+                            "recommendation": (
+                                f"Delete this Container App to save ${monthly_cost:.2f}/month. "
+                                f"With {total_requests} requests over {monitoring_days} days, it's essentially unused."
+                            ),
+                            "confidence_level": "critical" if total_requests == 0 else "high",
+                            "tags": dict(app.tags) if app.tags else {},
+                        },
+                    )
+                )
+
+        except Exception as e:
+            print(f"Error scanning Container Apps with zero requests in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_container_app_high_replica_low_traffic(
         self, region: str, detection_rules: dict | None = None
@@ -17930,7 +19002,108 @@ class AzureProvider(CloudProviderBase):
 
         Cost Impact: $276.32/month savings (70% reduction: 10 replicas → 3)
         """
-        return []
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.appcontainers import ContainerAppsAPIClient
+        from azure.monitor.query import MetricsQueryClient
+
+        orphans = []
+        min_replicas_threshold = detection_rules.get("min_replicas_threshold", 5) if detection_rules else 5
+        max_req_per_sec_per_replica = detection_rules.get("max_req_per_sec_per_replica", 10) if detection_rules else 10
+        monitoring_days = detection_rules.get("monitoring_days", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            )
+            client = ContainerAppsAPIClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            for app in client.container_apps.list_by_subscription():
+                app_location = app.location.lower().replace(" ", "") if app.location else ""
+                if app_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(app.id):
+                    continue
+
+                replica_metrics = await self._get_container_app_metrics(
+                    app.id, "Replicas", timedelta(days=monitoring_days), "Average", metrics_client
+                )
+                req_metrics = await self._get_container_app_metrics(
+                    app.id, "Requests", timedelta(days=monitoring_days), "Total", metrics_client
+                )
+
+                if replica_metrics["count"] == 0:
+                    continue
+
+                avg_replicas = replica_metrics["average"]
+                total_requests = req_metrics["total"]
+
+                if avg_replicas < min_replicas_threshold:
+                    continue
+
+                total_seconds = monitoring_days * 86400
+                req_per_sec = total_requests / total_seconds if total_seconds > 0 else 0
+                req_per_sec_per_replica = req_per_sec / avg_replicas if avg_replicas > 0 else 0
+
+                if req_per_sec_per_replica >= max_req_per_sec_per_replica:
+                    continue
+
+                # Calculate cost for over-scaled replicas
+                vcpu_per_replica = 0.25
+                memory_per_replica = 0.5
+                if app.template and app.template.containers:
+                    container = app.template.containers[0]
+                    if container.resources:
+                        vcpu_per_replica = float(container.resources.cpu or 0.25)
+                        memory_per_replica = float((container.resources.memory or "0.5Gi").replace("Gi", ""))
+
+                # Recommend reducing to 3 replicas (or proportional to traffic)
+                recommended_replicas = max(2, round(avg_replicas * 0.3))
+                excess_replicas = avg_replicas - recommended_replicas
+                excess_cost = excess_replicas * self._calculate_container_app_monthly_cost(vcpu_per_replica, memory_per_replica)
+                savings = round(excess_cost, 2)
+
+                if savings <= 0:
+                    continue
+
+                orphans.append(
+                    OrphanResourceData(
+                        resource_type="container_app_high_replica_low_traffic",
+                        resource_id=app.id,
+                        resource_name=app.name,
+                        region=app.location,
+                        estimated_monthly_cost=savings,
+                        resource_metadata={
+                            "app_id": app.id,
+                            "app_name": app.name,
+                            "avg_replicas": round(avg_replicas, 1),
+                            "recommended_replicas": recommended_replicas,
+                            "total_requests": int(total_requests),
+                            "req_per_sec": round(req_per_sec, 2),
+                            "req_per_sec_per_replica": round(req_per_sec_per_replica, 2),
+                            "monitoring_days": monitoring_days,
+                            "potential_savings_usd": savings,
+                            "orphan_reason": (
+                                f"Container App '{app.name}' has avg {avg_replicas:.1f} replicas but only "
+                                f"{req_per_sec_per_replica:.1f} req/sec/replica over {monitoring_days} days. "
+                                f"Over-scaled by {excess_replicas:.0f} replicas."
+                            ),
+                            "recommendation": (
+                                f"Reduce maxReplicas from {int(avg_replicas)} to {recommended_replicas} "
+                                f"to save ${savings:.2f}/month. Traffic doesn't justify current scale."
+                            ),
+                            "confidence_level": "high" if req_per_sec_per_replica < 1 else "medium",
+                            "tags": dict(app.tags) if app.tags else {},
+                        },
+                    )
+                )
+
+        except Exception as e:
+            print(f"Error scanning Container App replica/traffic in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_container_app_autoscaling_not_triggering(
         self, region: str, detection_rules: dict | None = None
@@ -17947,7 +19120,117 @@ class AzureProvider(CloudProviderBase):
 
         Cost Impact: Waste capacity (stuck at max) or underprovisioned (stuck at min)
         """
-        return []
+        import math
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.appcontainers import ContainerAppsAPIClient
+        from azure.monitor.query import MetricsQueryClient
+
+        orphans = []
+        monitoring_days = detection_rules.get("monitoring_days", 30) if detection_rules else 30
+        max_stddev = detection_rules.get("max_stddev", 0.5) if detection_rules else 0.5
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            )
+            client = ContainerAppsAPIClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            for app in client.container_apps.list_by_subscription():
+                app_location = app.location.lower().replace(" ", "") if app.location else ""
+                if app_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(app.id):
+                    continue
+
+                # Check autoscale is configured
+                if not app.template or not app.template.scale:
+                    continue
+
+                min_replicas = app.template.scale.min_replicas or 0
+                max_replicas = app.template.scale.max_replicas or 10
+
+                if min_replicas >= max_replicas:
+                    continue  # No autoscale range
+
+                if max_replicas - min_replicas < 2:
+                    continue  # Too narrow to be meaningful
+
+                replica_metrics = await self._get_container_app_metrics(
+                    app.id, "Replicas", timedelta(days=monitoring_days), "Average", metrics_client
+                )
+
+                if replica_metrics["count"] < 24:  # Need at least 1 day of data
+                    continue
+
+                values = replica_metrics["values"]
+                avg = replica_metrics["average"]
+
+                # Calculate standard deviation
+                variance = sum((v - avg) ** 2 for v in values) / len(values) if values else 0
+                stddev = math.sqrt(variance)
+
+                if stddev >= max_stddev:
+                    continue  # Autoscale is working
+
+                stuck_at = round(avg)
+                is_stuck_at_max = abs(avg - max_replicas) < 1
+                is_stuck_at_min = abs(avg - min_replicas) < 1
+
+                issue = "stuck at maximum (wasting capacity)" if is_stuck_at_max else (
+                    "stuck at minimum (may need capacity)" if is_stuck_at_min else
+                    f"stuck at {stuck_at} replicas"
+                )
+
+                # Calculate wasted cost if stuck at max
+                waste_cost = 0.0
+                if is_stuck_at_max and app.template and app.template.containers:
+                    container = app.template.containers[0]
+                    if container.resources:
+                        vcpu = float(container.resources.cpu or 0.25)
+                        mem = float((container.resources.memory or "0.5Gi").replace("Gi", ""))
+                        excess = max_replicas - min_replicas
+                        waste_cost = round(excess * self._calculate_container_app_monthly_cost(vcpu, mem), 2)
+
+                orphans.append(
+                    OrphanResourceData(
+                        resource_type="container_app_autoscaling_not_triggering",
+                        resource_id=app.id,
+                        resource_name=app.name,
+                        region=app.location,
+                        estimated_monthly_cost=waste_cost,
+                        resource_metadata={
+                            "app_id": app.id,
+                            "app_name": app.name,
+                            "min_replicas": min_replicas,
+                            "max_replicas": max_replicas,
+                            "avg_replicas": round(avg, 1),
+                            "replica_stddev": round(stddev, 3),
+                            "is_stuck_at_max": is_stuck_at_max,
+                            "is_stuck_at_min": is_stuck_at_min,
+                            "monitoring_days": monitoring_days,
+                            "potential_savings_usd": waste_cost,
+                            "orphan_reason": (
+                                f"Container App '{app.name}' has autoscale configured (min={min_replicas}, max={max_replicas}) "
+                                f"but replicas are {issue}. Replica stddev={stddev:.3f} over {monitoring_days} days "
+                                f"(threshold: {max_stddev}). Autoscale rules may be misconfigured."
+                            ),
+                            "recommendation": (
+                                f"Review autoscale rules for this app. "
+                                f"{'Consider reducing maxReplicas to lower cost.' if is_stuck_at_max else 'Check if scale rules match actual traffic patterns.'}"
+                            ),
+                            "confidence_level": "high" if is_stuck_at_max else "medium",
+                            "tags": dict(app.tags) if app.tags else {},
+                        },
+                    )
+                )
+
+        except Exception as e:
+            print(f"Error scanning Container App autoscaling in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_container_app_cold_start_issues(
         self, region: str, detection_rules: dict | None = None
@@ -17958,13 +19241,95 @@ class AzureProvider(CloudProviderBase):
 
         Detection Logic:
         - minReplicas = 0 (scale-to-zero enabled)
-        - Query "ContainerStartDurationMs" metric (30 days average)
-        - avg_cold_start > max_avg_cold_start_ms (default 10000ms)
-        - cold_start_count >= min_cold_start_count (default 50)
+        - Query "RestartCount" metric as proxy for cold starts (30 days)
+        - High restart count with scale-to-zero indicates cold start pattern
 
         Cost Impact: Trade-off: +$39.42/month (minReplicas=1) vs eliminate cold starts
         """
-        return []
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.appcontainers import ContainerAppsAPIClient
+        from azure.monitor.query import MetricsQueryClient
+
+        orphans = []
+        monitoring_days = detection_rules.get("monitoring_days", 30) if detection_rules else 30
+        min_restart_count = detection_rules.get("min_restart_count", 50) if detection_rules else 50
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            )
+            client = ContainerAppsAPIClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            for app in client.container_apps.list_by_subscription():
+                app_location = app.location.lower().replace(" ", "") if app.location else ""
+                if app_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(app.id):
+                    continue
+
+                # Check scale-to-zero
+                if not app.template or not app.template.scale:
+                    continue
+
+                min_replicas = app.template.scale.min_replicas or 0
+                if min_replicas > 0:
+                    continue  # Not scale-to-zero
+
+                restart_metrics = await self._get_container_app_metrics(
+                    app.id, "RestartCount", timedelta(days=monitoring_days), "Total", metrics_client
+                )
+
+                total_restarts = int(restart_metrics["total"])
+
+                if total_restarts < min_restart_count:
+                    continue
+
+                # Cost of keeping minReplicas=1
+                vcpu = 0.25
+                memory_gib = 0.5
+                if app.template and app.template.containers:
+                    container = app.template.containers[0]
+                    if container.resources:
+                        vcpu = float(container.resources.cpu or 0.25)
+                        memory_gib = float((container.resources.memory or "0.5Gi").replace("Gi", ""))
+
+                warmup_cost = round(self._calculate_container_app_monthly_cost(vcpu, memory_gib), 2)
+
+                orphans.append(
+                    OrphanResourceData(
+                        resource_type="container_app_cold_start_issues",
+                        resource_id=app.id,
+                        resource_name=app.name,
+                        region=app.location,
+                        estimated_monthly_cost=warmup_cost,
+                        resource_metadata={
+                            "app_id": app.id,
+                            "app_name": app.name,
+                            "min_replicas": min_replicas,
+                            "total_restarts": total_restarts,
+                            "monitoring_days": monitoring_days,
+                            "warmup_cost_usd": warmup_cost,
+                            "orphan_reason": (
+                                f"Container App '{app.name}' has scale-to-zero (minReplicas=0) with {total_restarts} "
+                                f"restarts over {monitoring_days} days, indicating frequent cold starts."
+                            ),
+                            "recommendation": (
+                                f"Set minReplicas=1 to eliminate cold starts at a cost of ${warmup_cost:.2f}/month. "
+                                f"With {total_restarts} restarts, users are experiencing latency from cold starts."
+                            ),
+                            "confidence_level": "high" if total_restarts > 200 else "medium",
+                            "tags": dict(app.tags) if app.tags else {},
+                        },
+                    )
+                )
+
+        except Exception as e:
+            print(f"Error scanning Container App cold starts in {region}: {str(e)}")
+
+        return orphans
 
     # ===== Azure Virtual Desktop (AVD) Waste Detection (18 scenarios - 100% coverage) =====
 
