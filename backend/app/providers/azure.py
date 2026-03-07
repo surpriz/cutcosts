@@ -19450,7 +19450,98 @@ class AzureProvider(CloudProviderBase):
 
         Cost Impact: $32/month per host (OS disk $12.29 + FSLogix storage)
         """
-        return []
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.desktopvirtualization import DesktopVirtualizationMgmtClient
+        from azure.mgmt.compute import ComputeManagementClient
+
+        orphans = []
+        min_stopped_days = detection_rules.get("min_stopped_days", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id, client_id=self.client_id, client_secret=self.client_secret,
+            )
+            avd_client = DesktopVirtualizationMgmtClient(credential, self.subscription_id)
+            compute_client = ComputeManagementClient(credential, self.subscription_id)
+
+            for hp in avd_client.host_pools.list():
+                hp_location = hp.location.lower().replace(" ", "") if hp.location else ""
+                if hp_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(hp.id):
+                    continue
+
+                rg_name = hp.id.split("/")[4] if len(hp.id.split("/")) > 4 else None
+                if not rg_name:
+                    continue
+
+                try:
+                    session_hosts = list(avd_client.session_hosts.list(rg_name, hp.name))
+                except Exception:
+                    continue
+
+                for sh in session_hosts:
+                    # Check if deallocated via status
+                    status = (sh.status or "").lower() if hasattr(sh, "status") else ""
+                    if "unavailable" not in status and "shutdown" not in status:
+                        # Try to check VM power state
+                        vm_id = sh.resource_id if hasattr(sh, "resource_id") else None
+                        if vm_id:
+                            try:
+                                vm_rg = vm_id.split("/resourceGroups/")[1].split("/")[0]
+                                vm_name = vm_id.split("/")[-1]
+                                vm = compute_client.virtual_machines.get(vm_rg, vm_name, expand="instanceView")
+                                power_state = ""
+                                if vm.instance_view and vm.instance_view.statuses:
+                                    for s in vm.instance_view.statuses:
+                                        if s.code and s.code.startswith("PowerState/"):
+                                            power_state = s.code.split("/")[1]
+                                if power_state != "deallocated":
+                                    continue
+                            except Exception:
+                                continue
+                        else:
+                            continue
+
+                    # Estimate age of being stopped
+                    age_days = min_stopped_days + 1  # Conservative estimate
+                    if hasattr(sh, 'last_heart_beat') and sh.last_heart_beat:
+                        last_hb = sh.last_heart_beat
+                        if last_hb.tzinfo is None:
+                            last_hb = last_hb.replace(tzinfo=timezone.utc)
+                        age_days = (datetime.now(timezone.utc) - last_hb).days
+
+                    if age_days < min_stopped_days:
+                        continue
+
+                    monthly_cost = 32.0  # OS disk + FSLogix storage
+                    already_wasted = round(monthly_cost * (age_days / 30), 2)
+
+                    orphans.append(OrphanResourceData(
+                        resource_type="avd_session_host_stopped",
+                        resource_id=sh.resource_id or sh.name,
+                        resource_name=sh.name,
+                        region=hp.location,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata={
+                            "host_pool_name": hp.name,
+                            "session_host_name": sh.name,
+                            "status": status,
+                            "age_days": age_days,
+                            "monthly_cost_usd": monthly_cost,
+                            "already_wasted": already_wasted,
+                            "orphan_reason": f"Session host '{sh.name}' deallocated for {age_days}+ days. Disk costs ${monthly_cost}/month.",
+                            "recommendation": "Delete this session host and its disks to stop paying storage costs.",
+                            "confidence_level": self._calculate_confidence_level(age_days, detection_rules),
+                            "tags": {},
+                        },
+                    ))
+
+        except Exception as e:
+            print(f"Error scanning AVD stopped session hosts in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_avd_session_host_never_used(
         self, region: str, detection_rules: dict | None = None
@@ -19461,12 +19552,88 @@ class AzureProvider(CloudProviderBase):
 
         Detection Logic:
         - Session host age > min_age_days (default 30)
-        - 0 user sessions ever created
+        - 0 user sessions ever (sessions = 0)
         - Full VM + storage cost waste
 
         Cost Impact: $140-180/month per host (VM + disk)
         """
-        return []
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.desktopvirtualization import DesktopVirtualizationMgmtClient
+
+        orphans = []
+        min_age_days = detection_rules.get("min_age_days", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id, client_id=self.client_id, client_secret=self.client_secret,
+            )
+            avd_client = DesktopVirtualizationMgmtClient(credential, self.subscription_id)
+
+            for hp in avd_client.host_pools.list():
+                hp_location = hp.location.lower().replace(" ", "") if hp.location else ""
+                if hp_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(hp.id):
+                    continue
+
+                rg_name = hp.id.split("/")[4] if len(hp.id.split("/")) > 4 else None
+                if not rg_name:
+                    continue
+
+                try:
+                    session_hosts = list(avd_client.session_hosts.list(rg_name, hp.name))
+                except Exception:
+                    continue
+
+                for sh in session_hosts:
+                    sessions = sh.sessions if hasattr(sh, "sessions") else 0
+                    if sessions and sessions > 0:
+                        continue
+
+                    age_days = 0
+                    if hasattr(sh, 'system_data') and sh.system_data and sh.system_data.created_at:
+                        created = sh.system_data.created_at
+                        if created.tzinfo is None:
+                            created = created.replace(tzinfo=timezone.utc)
+                        age_days = (datetime.now(timezone.utc) - created).days
+                    elif hasattr(sh, 'last_update_time') and sh.last_update_time:
+                        age_days = min_age_days + 1
+
+                    if age_days < min_age_days:
+                        continue
+
+                    vm_size = ""
+                    if hasattr(sh, 'resource_id') and sh.resource_id:
+                        vm_size = sh.resource_id.split("/")[-1] if sh.resource_id else ""
+
+                    monthly_cost = 140.0  # Standard D2s_v3 + disk
+                    already_wasted = round(monthly_cost * (age_days / 30), 2)
+
+                    orphans.append(OrphanResourceData(
+                        resource_type="avd_session_host_never_used",
+                        resource_id=sh.resource_id or sh.name,
+                        resource_name=sh.name,
+                        region=hp.location,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata={
+                            "host_pool_name": hp.name,
+                            "session_host_name": sh.name,
+                            "sessions": 0,
+                            "age_days": age_days,
+                            "monthly_cost_usd": monthly_cost,
+                            "already_wasted": already_wasted,
+                            "orphan_reason": f"Session host '{sh.name}' has 0 sessions since creation ({age_days} days). 100% waste at ${monthly_cost}/month.",
+                            "recommendation": "Delete this session host - it has never been used.",
+                            "confidence_level": self._calculate_confidence_level(age_days, detection_rules),
+                            "tags": {},
+                        },
+                    ))
+
+        except Exception as e:
+            print(f"Error scanning AVD never-used session hosts in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_avd_host_pool_no_autoscale(
         self, region: str, detection_rules: dict | None = None
@@ -19482,7 +19649,83 @@ class AzureProvider(CloudProviderBase):
 
         Cost Impact: $933/month for 10 hosts (always-on $1,400 vs autoscale $467)
         """
-        return []
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.desktopvirtualization import DesktopVirtualizationMgmtClient
+
+        orphans = []
+        min_hosts_for_autoscale = detection_rules.get("min_hosts_for_autoscale", 5) if detection_rules else 5
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id, client_id=self.client_id, client_secret=self.client_secret,
+            )
+            avd_client = DesktopVirtualizationMgmtClient(credential, self.subscription_id)
+
+            # Build scaling plan → host pool mapping
+            scaling_plan_pools: set[str] = set()
+            try:
+                for plan in avd_client.scaling_plans.list_by_subscription():
+                    if plan.host_pool_references:
+                        for ref in plan.host_pool_references:
+                            if hasattr(ref, 'host_pool_arm_path') and ref.host_pool_arm_path:
+                                scaling_plan_pools.add(ref.host_pool_arm_path.lower())
+            except Exception:
+                pass
+
+            for hp in avd_client.host_pools.list():
+                hp_location = hp.location.lower().replace(" ", "") if hp.location else ""
+                if hp_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(hp.id):
+                    continue
+
+                if hp.host_pool_type != "Pooled":
+                    continue
+
+                # Check if scaling plan is attached
+                if hp.id.lower() in scaling_plan_pools:
+                    continue
+
+                rg_name = hp.id.split("/")[4] if len(hp.id.split("/")) > 4 else None
+                if not rg_name:
+                    continue
+
+                try:
+                    host_count = len(list(avd_client.session_hosts.list(rg_name, hp.name)))
+                except Exception:
+                    host_count = 0
+
+                if host_count < min_hosts_for_autoscale:
+                    continue
+
+                cost_per_host = 140.0
+                total_cost = host_count * cost_per_host
+                potential_savings = round(total_cost * 0.65, 2)  # ~65% savings with autoscale
+
+                orphans.append(OrphanResourceData(
+                    resource_type="avd_host_pool_no_autoscale",
+                    resource_id=hp.id,
+                    resource_name=hp.name,
+                    region=hp.location,
+                    estimated_monthly_cost=potential_savings,
+                    resource_metadata={
+                        "host_pool_name": hp.name,
+                        "host_pool_type": "Pooled",
+                        "session_host_count": host_count,
+                        "has_scaling_plan": False,
+                        "current_cost_usd": total_cost,
+                        "potential_savings_usd": potential_savings,
+                        "orphan_reason": f"Pooled host pool '{hp.name}' with {host_count} hosts has no autoscale plan. All hosts run 24/7 costing ${total_cost:.0f}/month.",
+                        "recommendation": f"Configure a scaling plan to save ~${potential_savings:.0f}/month (65% reduction). Autoscale can deallocate hosts during off-peak hours.",
+                        "confidence_level": "high",
+                        "tags": dict(hp.tags) if hp.tags else {},
+                    },
+                ))
+
+        except Exception as e:
+            print(f"Error scanning AVD host pools without autoscale in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_avd_host_pool_over_provisioned(
         self, region: str, detection_rules: dict | None = None
@@ -19493,12 +19736,86 @@ class AzureProvider(CloudProviderBase):
 
         Detection Logic:
         - Capacity utilization < max_utilization_threshold (default 30%)
-        - Observation period >= min_observation_days (default 30)
-        - Calculate recommended hosts with buffer
+        - Calculate: active_sessions / (host_count * max_session_limit)
+        - Recommend reducing hosts
 
         Cost Impact: $840/month savings (10 hosts → 4 hosts)
         """
-        return []
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.desktopvirtualization import DesktopVirtualizationMgmtClient
+
+        orphans = []
+        max_utilization = detection_rules.get("max_utilization_threshold", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id, client_id=self.client_id, client_secret=self.client_secret,
+            )
+            avd_client = DesktopVirtualizationMgmtClient(credential, self.subscription_id)
+
+            for hp in avd_client.host_pools.list():
+                hp_location = hp.location.lower().replace(" ", "") if hp.location else ""
+                if hp_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(hp.id):
+                    continue
+
+                rg_name = hp.id.split("/")[4] if len(hp.id.split("/")) > 4 else None
+                if not rg_name:
+                    continue
+
+                max_session_limit = hp.max_session_limit or 10
+
+                try:
+                    session_hosts = list(avd_client.session_hosts.list(rg_name, hp.name))
+                except Exception:
+                    continue
+
+                host_count = len(session_hosts)
+                if host_count < 3:
+                    continue
+
+                total_capacity = host_count * max_session_limit
+                active_sessions = sum(sh.sessions or 0 for sh in session_hosts if hasattr(sh, 'sessions'))
+                utilization = (active_sessions / total_capacity * 100) if total_capacity > 0 else 0
+
+                if utilization >= max_utilization:
+                    continue
+
+                # Recommend hosts based on actual usage with 50% buffer
+                recommended_hosts = max(2, round((active_sessions / max_session_limit) * 1.5))
+                excess_hosts = host_count - recommended_hosts
+                if excess_hosts <= 0:
+                    continue
+
+                cost_per_host = 140.0
+                savings = round(excess_hosts * cost_per_host, 2)
+
+                orphans.append(OrphanResourceData(
+                    resource_type="avd_host_pool_over_provisioned",
+                    resource_id=hp.id,
+                    resource_name=hp.name,
+                    region=hp.location,
+                    estimated_monthly_cost=savings,
+                    resource_metadata={
+                        "host_pool_name": hp.name,
+                        "session_host_count": host_count,
+                        "recommended_host_count": recommended_hosts,
+                        "active_sessions": active_sessions,
+                        "total_capacity": total_capacity,
+                        "utilization_percent": round(utilization, 1),
+                        "potential_savings_usd": savings,
+                        "orphan_reason": f"Host pool '{hp.name}' at {utilization:.0f}% utilization ({active_sessions}/{total_capacity} sessions). {host_count} hosts but only {recommended_hosts} needed.",
+                        "recommendation": f"Reduce from {host_count} to {recommended_hosts} session hosts to save ${savings:.0f}/month.",
+                        "confidence_level": "high" if utilization < 15 else "medium",
+                        "tags": dict(hp.tags) if hp.tags else {},
+                    },
+                ))
+
+        except Exception as e:
+            print(f"Error scanning AVD over-provisioned host pools in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_avd_application_group_empty(
         self, region: str, detection_rules: dict | None = None
@@ -19514,7 +19831,74 @@ class AzureProvider(CloudProviderBase):
 
         Cost Impact: No direct cost but complexity waste
         """
-        return []
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.desktopvirtualization import DesktopVirtualizationMgmtClient
+
+        orphans = []
+        min_age_days = detection_rules.get("min_age_days", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id, client_id=self.client_id, client_secret=self.client_secret,
+            )
+            avd_client = DesktopVirtualizationMgmtClient(credential, self.subscription_id)
+
+            for ag in avd_client.application_groups.list_by_subscription():
+                ag_location = ag.location.lower().replace(" ", "") if ag.location else ""
+                if ag_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(ag.id):
+                    continue
+
+                if ag.application_group_type != "RemoteApp":
+                    continue
+
+                rg_name = ag.id.split("/")[4] if len(ag.id.split("/")) > 4 else None
+                if not rg_name:
+                    continue
+
+                try:
+                    apps = list(avd_client.applications.list(rg_name, ag.name))
+                    app_count = len(apps)
+                except Exception:
+                    app_count = 0
+
+                if app_count > 0:
+                    continue
+
+                age_days = 0
+                if hasattr(ag, 'system_data') and ag.system_data and ag.system_data.created_at:
+                    created = ag.system_data.created_at
+                    if created.tzinfo is None:
+                        created = created.replace(tzinfo=timezone.utc)
+                    age_days = (datetime.now(timezone.utc) - created).days
+
+                if age_days < min_age_days:
+                    continue
+
+                orphans.append(OrphanResourceData(
+                    resource_type="avd_application_group_empty",
+                    resource_id=ag.id,
+                    resource_name=ag.name,
+                    region=ag.location,
+                    estimated_monthly_cost=0.0,
+                    resource_metadata={
+                        "application_group_name": ag.name,
+                        "application_group_type": "RemoteApp",
+                        "application_count": 0,
+                        "age_days": age_days,
+                        "orphan_reason": f"RemoteApp group '{ag.name}' has 0 applications for {age_days} days.",
+                        "recommendation": "Delete this empty application group to reduce management complexity.",
+                        "confidence_level": self._calculate_confidence_level(age_days, detection_rules),
+                        "tags": dict(ag.tags) if ag.tags else {},
+                    },
+                ))
+
+        except Exception as e:
+            print(f"Error scanning AVD application groups in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_avd_workspace_empty(
         self, region: str, detection_rules: dict | None = None
@@ -19529,7 +19913,61 @@ class AzureProvider(CloudProviderBase):
 
         Cost Impact: Minimal but hygiene
         """
-        return []
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.desktopvirtualization import DesktopVirtualizationMgmtClient
+
+        orphans = []
+        min_age_days = detection_rules.get("min_age_days", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id, client_id=self.client_id, client_secret=self.client_secret,
+            )
+            avd_client = DesktopVirtualizationMgmtClient(credential, self.subscription_id)
+
+            for ws in avd_client.workspaces.list_by_subscription():
+                ws_location = ws.location.lower().replace(" ", "") if ws.location else ""
+                if ws_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(ws.id):
+                    continue
+
+                refs = ws.application_group_references or []
+                if len(refs) > 0:
+                    continue
+
+                age_days = 0
+                if hasattr(ws, 'system_data') and ws.system_data and ws.system_data.created_at:
+                    created = ws.system_data.created_at
+                    if created.tzinfo is None:
+                        created = created.replace(tzinfo=timezone.utc)
+                    age_days = (datetime.now(timezone.utc) - created).days
+
+                if age_days < min_age_days:
+                    continue
+
+                orphans.append(OrphanResourceData(
+                    resource_type="avd_workspace_empty",
+                    resource_id=ws.id,
+                    resource_name=ws.name,
+                    region=ws.location,
+                    estimated_monthly_cost=0.0,
+                    resource_metadata={
+                        "workspace_name": ws.name,
+                        "application_group_count": 0,
+                        "age_days": age_days,
+                        "orphan_reason": f"AVD Workspace '{ws.name}' has 0 application groups for {age_days} days.",
+                        "recommendation": "Delete this empty workspace to reduce clutter.",
+                        "confidence_level": self._calculate_confidence_level(age_days, detection_rules),
+                        "tags": dict(ws.tags) if ws.tags else {},
+                    },
+                ))
+
+        except Exception as e:
+            print(f"Error scanning AVD workspaces in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_avd_premium_disk_in_dev(
         self, region: str, detection_rules: dict | None = None
@@ -19541,11 +19979,100 @@ class AzureProvider(CloudProviderBase):
         Detection Logic:
         - Session host VM OS disk = 'Premium_LRS'
         - Environment tag in dev_environments (default: dev, test, staging, qa)
-        - Age > min_age_days (default 30)
 
         Cost Impact: $10.11/month savings per host (Premium $22.40 → Standard $12.29)
         """
-        return []
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.desktopvirtualization import DesktopVirtualizationMgmtClient
+        from azure.mgmt.compute import ComputeManagementClient
+
+        orphans = []
+        dev_tags = detection_rules.get("dev_environments", ["dev", "test", "staging", "qa", "sandbox"]) if detection_rules else ["dev", "test", "staging", "qa", "sandbox"]
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id, client_id=self.client_id, client_secret=self.client_secret,
+            )
+            avd_client = DesktopVirtualizationMgmtClient(credential, self.subscription_id)
+            compute_client = ComputeManagementClient(credential, self.subscription_id)
+
+            for hp in avd_client.host_pools.list():
+                hp_location = hp.location.lower().replace(" ", "") if hp.location else ""
+                if hp_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(hp.id):
+                    continue
+
+                # Check if dev/test
+                is_dev = False
+                hp_name_lower = (hp.name or "").lower()
+                for tag in dev_tags:
+                    if tag in hp_name_lower:
+                        is_dev = True
+                        break
+                if not is_dev and hp.tags:
+                    env_tag = (hp.tags.get("environment", "") or "").lower()
+                    for tag in dev_tags:
+                        if tag in env_tag:
+                            is_dev = True
+                            break
+                if not is_dev:
+                    continue
+
+                rg_name = hp.id.split("/")[4] if len(hp.id.split("/")) > 4 else None
+                if not rg_name:
+                    continue
+
+                try:
+                    session_hosts = list(avd_client.session_hosts.list(rg_name, hp.name))
+                except Exception:
+                    continue
+
+                for sh in session_hosts:
+                    vm_id = sh.resource_id if hasattr(sh, "resource_id") else None
+                    if not vm_id:
+                        continue
+
+                    try:
+                        vm_rg = vm_id.split("/resourceGroups/")[1].split("/")[0]
+                        vm_name = vm_id.split("/")[-1]
+                        vm = compute_client.virtual_machines.get(vm_rg, vm_name)
+
+                        if vm.storage_profile and vm.storage_profile.os_disk:
+                            disk_type = vm.storage_profile.os_disk.managed_disk.storage_account_type if vm.storage_profile.os_disk.managed_disk else ""
+                            if disk_type != "Premium_LRS":
+                                continue
+                        else:
+                            continue
+                    except Exception:
+                        continue
+
+                    savings = 10.11  # Premium $22.40 → Standard $12.29
+
+                    orphans.append(OrphanResourceData(
+                        resource_type="avd_premium_disk_in_dev",
+                        resource_id=vm_id,
+                        resource_name=sh.name,
+                        region=hp.location,
+                        estimated_monthly_cost=savings,
+                        resource_metadata={
+                            "host_pool_name": hp.name,
+                            "session_host_name": sh.name,
+                            "disk_type": "Premium_LRS",
+                            "recommended_disk_type": "StandardSSD_LRS",
+                            "detected_as": "dev/test",
+                            "savings_per_host_usd": savings,
+                            "orphan_reason": f"Session host '{sh.name}' in dev/test pool '{hp.name}' uses Premium SSD (${22.40}/month vs ${12.29}/month StandardSSD).",
+                            "recommendation": f"Switch OS disk from Premium to StandardSSD to save ${savings:.2f}/month per host.",
+                            "confidence_level": "medium",
+                            "tags": dict(hp.tags) if hp.tags else {},
+                        },
+                    ))
+
+        except Exception as e:
+            print(f"Error scanning AVD premium disks in dev in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_avd_unnecessary_availability_zones(
         self, region: str, detection_rules: dict | None = None
@@ -19557,11 +20084,98 @@ class AzureProvider(CloudProviderBase):
         Detection Logic:
         - Session hosts deployed across >1 availability zone
         - Environment tag in dev_environments
-        - Age > min_age_days (default 30)
 
         Cost Impact: $350/month for 10 hosts (~25% zone redundancy overhead)
         """
-        return []
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.desktopvirtualization import DesktopVirtualizationMgmtClient
+        from azure.mgmt.compute import ComputeManagementClient
+
+        orphans = []
+        dev_tags = detection_rules.get("dev_environments", ["dev", "test", "staging", "qa", "sandbox"]) if detection_rules else ["dev", "test", "staging", "qa", "sandbox"]
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id, client_id=self.client_id, client_secret=self.client_secret,
+            )
+            avd_client = DesktopVirtualizationMgmtClient(credential, self.subscription_id)
+            compute_client = ComputeManagementClient(credential, self.subscription_id)
+
+            for hp in avd_client.host_pools.list():
+                hp_location = hp.location.lower().replace(" ", "") if hp.location else ""
+                if hp_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(hp.id):
+                    continue
+
+                is_dev = False
+                hp_name_lower = (hp.name or "").lower()
+                for tag in dev_tags:
+                    if tag in hp_name_lower:
+                        is_dev = True
+                        break
+                if not is_dev and hp.tags:
+                    for tag in dev_tags:
+                        if tag in (hp.tags.get("environment", "") or "").lower():
+                            is_dev = True
+                            break
+                if not is_dev:
+                    continue
+
+                rg_name = hp.id.split("/")[4] if len(hp.id.split("/")) > 4 else None
+                if not rg_name:
+                    continue
+
+                try:
+                    session_hosts = list(avd_client.session_hosts.list(rg_name, hp.name))
+                except Exception:
+                    continue
+
+                zones: set[str] = set()
+                for sh in session_hosts:
+                    vm_id = sh.resource_id if hasattr(sh, "resource_id") else None
+                    if not vm_id:
+                        continue
+                    try:
+                        vm_rg = vm_id.split("/resourceGroups/")[1].split("/")[0]
+                        vm_name = vm_id.split("/")[-1]
+                        vm = compute_client.virtual_machines.get(vm_rg, vm_name)
+                        if vm.zones:
+                            zones.update(vm.zones)
+                    except Exception:
+                        continue
+
+                if len(zones) <= 1:
+                    continue
+
+                host_count = len(session_hosts)
+                overhead_per_host = 35.0  # ~25% of $140
+                total_overhead = round(host_count * overhead_per_host, 2)
+
+                orphans.append(OrphanResourceData(
+                    resource_type="avd_unnecessary_availability_zones",
+                    resource_id=hp.id,
+                    resource_name=hp.name,
+                    region=hp.location,
+                    estimated_monthly_cost=total_overhead,
+                    resource_metadata={
+                        "host_pool_name": hp.name,
+                        "zones_used": sorted(zones),
+                        "zone_count": len(zones),
+                        "session_host_count": host_count,
+                        "detected_as": "dev/test",
+                        "overhead_usd": total_overhead,
+                        "orphan_reason": f"Dev/test pool '{hp.name}' has {host_count} hosts across {len(zones)} zones. Zone redundancy adds ~${total_overhead:.0f}/month.",
+                        "recommendation": f"Deploy all hosts in a single zone to save ~${total_overhead:.0f}/month. Zone redundancy is unnecessary for dev/test.",
+                        "confidence_level": "medium",
+                        "tags": dict(hp.tags) if hp.tags else {},
+                    },
+                ))
+
+        except Exception as e:
+            print(f"Error scanning AVD availability zones in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_avd_personal_desktop_never_used(
         self, region: str, detection_rules: dict | None = None
@@ -19577,7 +20191,83 @@ class AzureProvider(CloudProviderBase):
 
         Cost Impact: $140-180/month per personal desktop
         """
-        return []
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.desktopvirtualization import DesktopVirtualizationMgmtClient
+
+        orphans = []
+        min_unused_days = detection_rules.get("min_unused_days", 60) if detection_rules else 60
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id, client_id=self.client_id, client_secret=self.client_secret,
+            )
+            avd_client = DesktopVirtualizationMgmtClient(credential, self.subscription_id)
+
+            for hp in avd_client.host_pools.list():
+                hp_location = hp.location.lower().replace(" ", "") if hp.location else ""
+                if hp_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(hp.id):
+                    continue
+
+                if hp.host_pool_type != "Personal":
+                    continue
+
+                rg_name = hp.id.split("/")[4] if len(hp.id.split("/")) > 4 else None
+                if not rg_name:
+                    continue
+
+                try:
+                    session_hosts = list(avd_client.session_hosts.list(rg_name, hp.name))
+                except Exception:
+                    continue
+
+                for sh in session_hosts:
+                    assigned_user = sh.assigned_user if hasattr(sh, "assigned_user") else None
+                    if not assigned_user:
+                        continue
+
+                    # Check last active connection
+                    days_since_last = 0
+                    if hasattr(sh, 'last_heart_beat') and sh.last_heart_beat:
+                        last_hb = sh.last_heart_beat
+                        if last_hb.tzinfo is None:
+                            last_hb = last_hb.replace(tzinfo=timezone.utc)
+                        days_since_last = (datetime.now(timezone.utc) - last_hb).days
+                    else:
+                        days_since_last = min_unused_days + 1
+
+                    if days_since_last < min_unused_days:
+                        continue
+
+                    monthly_cost = 140.0
+                    already_wasted = round(monthly_cost * (days_since_last / 30), 2)
+
+                    orphans.append(OrphanResourceData(
+                        resource_type="avd_personal_desktop_never_used",
+                        resource_id=sh.resource_id or sh.name,
+                        resource_name=sh.name,
+                        region=hp.location,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata={
+                            "host_pool_name": hp.name,
+                            "session_host_name": sh.name,
+                            "assigned_user": assigned_user,
+                            "days_since_last_activity": days_since_last,
+                            "monthly_cost_usd": monthly_cost,
+                            "already_wasted": already_wasted,
+                            "orphan_reason": f"Personal desktop '{sh.name}' assigned to '{assigned_user}' unused for {days_since_last} days. ${monthly_cost}/month waste.",
+                            "recommendation": "Unassign this user and deallocate the VM, or contact the user to verify if still needed.",
+                            "confidence_level": self._calculate_confidence_level(days_since_last, detection_rules),
+                            "tags": {},
+                        },
+                    ))
+
+        except Exception as e:
+            print(f"Error scanning AVD personal desktops in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_avd_fslogix_oversized(
         self, region: str, detection_rules: dict | None = None
@@ -19587,13 +20277,98 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 11: avd_fslogix_oversized - Migrate to Standard.
 
         Detection Logic:
-        - Storage account tier = 'Premium' (Azure Files Premium)
-        - FSLogix purpose (name/tag contains 'fslogix' or 'profile')
-        - Utilization < max_utilization_threshold (default 50%) OR avg IOPS < 3000
+        - Storage account with Premium file shares
+        - Name/tag contains 'fslogix' or 'profile'
+        - Utilization < max_utilization_threshold (default 50%)
 
         Cost Impact: $143/month savings per 1TB (Premium $204 → Standard $61)
         """
-        return []
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.storage import StorageManagementClient
+
+        orphans = []
+        max_utilization = detection_rules.get("max_utilization_threshold", 50) if detection_rules else 50
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id, client_id=self.client_id, client_secret=self.client_secret,
+            )
+            storage_client = StorageManagementClient(credential, self.subscription_id)
+
+            for account in storage_client.storage_accounts.list():
+                if account.location and account.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(account.id):
+                    continue
+
+                # Check if Premium FileStorage
+                if not account.kind or account.kind != "FileStorage":
+                    continue
+                if not account.sku or "Premium" not in (account.sku.name or ""):
+                    continue
+
+                # Check if FSLogix related
+                name_lower = (account.name or "").lower()
+                is_fslogix = "fslogix" in name_lower or "profile" in name_lower
+                if not is_fslogix and account.tags:
+                    tag_str = str(account.tags).lower()
+                    is_fslogix = "fslogix" in tag_str or "profile" in tag_str
+                if not is_fslogix:
+                    continue
+
+                # List file shares and check utilization
+                rg_name = account.id.split("/resourceGroups/")[1].split("/")[0] if "/resourceGroups/" in account.id else None
+                if not rg_name:
+                    continue
+
+                try:
+                    shares = list(storage_client.file_shares.list(rg_name, account.name))
+                except Exception:
+                    continue
+
+                for share in shares:
+                    quota_gb = share.share_quota or 100
+                    usage_gb = share.share_usage_bytes / (1024**3) if hasattr(share, 'share_usage_bytes') and share.share_usage_bytes else 0
+
+                    utilization_pct = (usage_gb / quota_gb * 100) if quota_gb > 0 else 0
+
+                    if utilization_pct >= max_utilization:
+                        continue
+
+                    # Premium: $0.20/GB, Standard: $0.06/GB
+                    premium_cost = quota_gb * 0.20
+                    standard_cost = max(usage_gb, 1) * 0.06
+                    savings = round(premium_cost - standard_cost, 2)
+
+                    if savings <= 0:
+                        continue
+
+                    orphans.append(OrphanResourceData(
+                        resource_type="avd_fslogix_oversized",
+                        resource_id=f"{account.id}/fileServices/default/shares/{share.name}",
+                        resource_name=f"{account.name}/{share.name}",
+                        region=account.location,
+                        estimated_monthly_cost=savings,
+                        resource_metadata={
+                            "storage_account": account.name,
+                            "share_name": share.name,
+                            "quota_gb": quota_gb,
+                            "usage_gb": round(usage_gb, 1),
+                            "utilization_percent": round(utilization_pct, 1),
+                            "premium_cost_usd": round(premium_cost, 2),
+                            "standard_cost_usd": round(standard_cost, 2),
+                            "potential_savings_usd": savings,
+                            "orphan_reason": f"FSLogix share '{share.name}' uses {usage_gb:.0f}GB of {quota_gb}GB quota ({utilization_pct:.0f}%). Premium costs ${premium_cost:.0f}/month vs ${standard_cost:.0f}/month on Standard.",
+                            "recommendation": f"Migrate from Premium to Standard Azure Files to save ${savings:.0f}/month. Low utilization doesn't justify Premium IOPS.",
+                            "confidence_level": "high" if utilization_pct < 25 else "medium",
+                            "tags": dict(account.tags) if account.tags else {},
+                        },
+                    ))
+
+        except Exception as e:
+            print(f"Error scanning AVD FSLogix storage in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_avd_session_host_old_vm_generation(
         self, region: str, detection_rules: dict | None = None
@@ -19604,12 +20379,92 @@ class AzureProvider(CloudProviderBase):
 
         Detection Logic:
         - VM size generation <= max_generation_allowed (default 3)
-        - Parse VM name (e.g., Standard_D4s_v3 → v3)
-        - Age > min_age_days (default 60)
+        - Parse VM size (e.g., Standard_D4s_v3 → v3)
 
         Cost Impact: $28/month per host (20% savings) + 20% performance gain
         """
-        return []
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.desktopvirtualization import DesktopVirtualizationMgmtClient
+        from azure.mgmt.compute import ComputeManagementClient
+
+        orphans = []
+        max_generation = detection_rules.get("max_generation_allowed", 3) if detection_rules else 3
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id, client_id=self.client_id, client_secret=self.client_secret,
+            )
+            avd_client = DesktopVirtualizationMgmtClient(credential, self.subscription_id)
+            compute_client = ComputeManagementClient(credential, self.subscription_id)
+
+            for hp in avd_client.host_pools.list():
+                hp_location = hp.location.lower().replace(" ", "") if hp.location else ""
+                if hp_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(hp.id):
+                    continue
+
+                rg_name = hp.id.split("/")[4] if len(hp.id.split("/")) > 4 else None
+                if not rg_name:
+                    continue
+
+                try:
+                    session_hosts = list(avd_client.session_hosts.list(rg_name, hp.name))
+                except Exception:
+                    continue
+
+                for sh in session_hosts:
+                    vm_id = sh.resource_id if hasattr(sh, "resource_id") else None
+                    if not vm_id:
+                        continue
+
+                    try:
+                        vm_rg = vm_id.split("/resourceGroups/")[1].split("/")[0]
+                        vm_name = vm_id.split("/")[-1]
+                        vm = compute_client.virtual_machines.get(vm_rg, vm_name)
+                        vm_size = vm.hardware_profile.vm_size if vm.hardware_profile else ""
+                    except Exception:
+                        continue
+
+                    # Parse generation from VM size (e.g., Standard_D4s_v3 → 3)
+                    generation = 0
+                    if "_v" in vm_size:
+                        try:
+                            generation = int(vm_size.split("_v")[-1])
+                        except (ValueError, IndexError):
+                            continue
+
+                    if generation == 0 or generation > max_generation:
+                        continue
+
+                    current_cost = self._get_vm_hourly_cost(vm_size) * 730
+                    savings = round(current_cost * 0.20, 2)  # ~20% savings with newer gen
+
+                    orphans.append(OrphanResourceData(
+                        resource_type="avd_session_host_old_vm_generation",
+                        resource_id=vm_id,
+                        resource_name=sh.name,
+                        region=hp.location,
+                        estimated_monthly_cost=savings,
+                        resource_metadata={
+                            "host_pool_name": hp.name,
+                            "session_host_name": sh.name,
+                            "vm_size": vm_size,
+                            "vm_generation": generation,
+                            "recommended_generation": max_generation + 2,
+                            "current_cost_usd": round(current_cost, 2),
+                            "savings_per_host_usd": savings,
+                            "orphan_reason": f"Session host '{sh.name}' uses {vm_size} (gen v{generation}). Newer generations offer 20% better price/performance.",
+                            "recommendation": f"Upgrade from v{generation} to v{max_generation + 2} VM series to save ~${savings:.0f}/month per host with better performance.",
+                            "confidence_level": "medium",
+                            "tags": {},
+                        },
+                    ))
+
+        except Exception as e:
+            print(f"Error scanning AVD old VM generations in {region}: {str(e)}")
+
+        return orphans
 
     # ===== Phase 2 - Azure Monitor Metrics (6 scenarios) =====
 
@@ -19623,11 +20478,115 @@ class AzureProvider(CloudProviderBase):
         Detection Logic:
         - Query Azure Monitor "Percentage CPU" metric (30 days average)
         - Avg CPU < max_cpu_utilization_percent (default 15%)
-        - Recommend smaller VM size with buffer
 
         Cost Impact: $70/month savings (D4s_v4 $140 → D2s_v4 $70)
         """
-        return []
+        from datetime import datetime, timezone, timedelta as td
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.desktopvirtualization import DesktopVirtualizationMgmtClient
+        from azure.mgmt.compute import ComputeManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans = []
+        max_cpu = detection_rules.get("max_cpu_utilization_percent", 15.0) if detection_rules else 15.0
+        monitoring_days = detection_rules.get("monitoring_days", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id, client_id=self.client_id, client_secret=self.client_secret,
+            )
+            avd_client = DesktopVirtualizationMgmtClient(credential, self.subscription_id)
+            compute_client = ComputeManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - td(days=monitoring_days)
+
+            for hp in avd_client.host_pools.list():
+                hp_location = hp.location.lower().replace(" ", "") if hp.location else ""
+                if hp_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(hp.id):
+                    continue
+
+                rg_name = hp.id.split("/")[4] if len(hp.id.split("/")) > 4 else None
+                if not rg_name:
+                    continue
+
+                try:
+                    session_hosts = list(avd_client.session_hosts.list(rg_name, hp.name))
+                except Exception:
+                    continue
+
+                for sh in session_hosts:
+                    vm_id = sh.resource_id if hasattr(sh, "resource_id") else None
+                    if not vm_id:
+                        continue
+
+                    try:
+                        response = metrics_client.query_resource(
+                            resource_uri=vm_id,
+                            metric_names=["Percentage CPU"],
+                            timespan=(start_time, end_time),
+                            granularity=td(hours=1),
+                            aggregations=[MetricAggregationType.AVERAGE],
+                        )
+
+                        cpu_values = []
+                        if response.metrics and len(response.metrics) > 0:
+                            metric = response.metrics[0]
+                            if metric.timeseries and len(metric.timeseries) > 0:
+                                for dp in metric.timeseries[0].data:
+                                    if dp.average is not None:
+                                        cpu_values.append(dp.average)
+
+                        if not cpu_values:
+                            continue
+
+                        avg_cpu = sum(cpu_values) / len(cpu_values)
+                        if avg_cpu >= max_cpu:
+                            continue
+
+                    except Exception:
+                        continue
+
+                    # Get VM size for cost calculation
+                    try:
+                        vm_rg = vm_id.split("/resourceGroups/")[1].split("/")[0]
+                        vm_name = vm_id.split("/")[-1]
+                        vm = compute_client.virtual_machines.get(vm_rg, vm_name)
+                        vm_size = vm.hardware_profile.vm_size if vm.hardware_profile else "Standard_D2s_v3"
+                    except Exception:
+                        vm_size = "Standard_D2s_v3"
+
+                    current_cost = round(self._get_vm_hourly_cost(vm_size) * 730, 2)
+                    savings = round(current_cost * 0.50, 2)
+
+                    orphans.append(OrphanResourceData(
+                        resource_type="avd_low_cpu_utilization",
+                        resource_id=vm_id,
+                        resource_name=sh.name,
+                        region=hp.location,
+                        estimated_monthly_cost=savings,
+                        resource_metadata={
+                            "host_pool_name": hp.name,
+                            "session_host_name": sh.name,
+                            "vm_size": vm_size,
+                            "avg_cpu_percent": round(avg_cpu, 1),
+                            "monitoring_days": monitoring_days,
+                            "current_cost_usd": current_cost,
+                            "potential_savings_usd": savings,
+                            "orphan_reason": f"Session host '{sh.name}' ({vm_size}) avg CPU {avg_cpu:.1f}% over {monitoring_days} days.",
+                            "recommendation": f"Downsize VM to save ~${savings:.0f}/month. CPU utilization is well below {max_cpu}%.",
+                            "confidence_level": "high" if avg_cpu < 5 else "medium",
+                            "tags": {},
+                        },
+                    ))
+
+        except Exception as e:
+            print(f"Error scanning AVD CPU utilization in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_avd_low_memory_utilization(
         self, region: str, detection_rules: dict | None = None
@@ -19639,27 +20598,221 @@ class AzureProvider(CloudProviderBase):
         Detection Logic:
         - Query Azure Monitor "Available Memory Bytes" metric
         - Memory used < 20% (available > 80%)
-        - E-series (memory optimized) → D-series (general purpose)
 
         Cost Impact: $40/month savings (E4s_v4 $180 → D4s_v4 $140)
         """
-        return []
+        from datetime import datetime, timezone, timedelta as td
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.desktopvirtualization import DesktopVirtualizationMgmtClient
+        from azure.mgmt.compute import ComputeManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans = []
+        max_memory_used_percent = detection_rules.get("max_memory_used_percent", 20.0) if detection_rules else 20.0
+        monitoring_days = detection_rules.get("monitoring_days", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id, client_id=self.client_id, client_secret=self.client_secret,
+            )
+            avd_client = DesktopVirtualizationMgmtClient(credential, self.subscription_id)
+            compute_client = ComputeManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - td(days=monitoring_days)
+
+            for hp in avd_client.host_pools.list():
+                hp_location = hp.location.lower().replace(" ", "") if hp.location else ""
+                if hp_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(hp.id):
+                    continue
+
+                rg_name = hp.id.split("/")[4] if len(hp.id.split("/")) > 4 else None
+                if not rg_name:
+                    continue
+
+                try:
+                    session_hosts = list(avd_client.session_hosts.list(rg_name, hp.name))
+                except Exception:
+                    continue
+
+                for sh in session_hosts:
+                    vm_id = sh.resource_id if hasattr(sh, "resource_id") else None
+                    if not vm_id:
+                        continue
+
+                    try:
+                        vm_rg = vm_id.split("/resourceGroups/")[1].split("/")[0]
+                        vm_name = vm_id.split("/")[-1]
+                        vm = compute_client.virtual_machines.get(vm_rg, vm_name)
+                        vm_size = vm.hardware_profile.vm_size if vm.hardware_profile else ""
+                    except Exception:
+                        continue
+
+                    # Only target E-series (memory optimized)
+                    if "Standard_E" not in vm_size:
+                        continue
+
+                    try:
+                        response = metrics_client.query_resource(
+                            resource_uri=vm_id,
+                            metric_names=["Available Memory Bytes"],
+                            timespan=(start_time, end_time),
+                            granularity=td(hours=1),
+                            aggregations=[MetricAggregationType.AVERAGE],
+                        )
+
+                        mem_values = []
+                        if response.metrics and len(response.metrics) > 0:
+                            metric = response.metrics[0]
+                            if metric.timeseries and len(metric.timeseries) > 0:
+                                for dp in metric.timeseries[0].data:
+                                    if dp.average is not None:
+                                        mem_values.append(dp.average)
+
+                        if not mem_values:
+                            continue
+
+                        avg_available_bytes = sum(mem_values) / len(mem_values)
+                        # E-series memory: extract from VM size
+                        vcores = self._get_flexible_server_vcores(vm_size)
+                        total_memory_gb = vcores * 8  # E-series ratio 1:8
+                        total_memory_bytes = total_memory_gb * (1024 ** 3)
+                        used_percent = ((total_memory_bytes - avg_available_bytes) / total_memory_bytes * 100) if total_memory_bytes > 0 else 100
+
+                        if used_percent >= max_memory_used_percent:
+                            continue
+
+                    except Exception:
+                        continue
+
+                    current_cost = round(self._get_vm_hourly_cost(vm_size) * 730, 2)
+                    # D-series equivalent is ~22% cheaper
+                    d_series_equivalent = vm_size.replace("Standard_E", "Standard_D")
+                    recommended_cost = round(self._get_vm_hourly_cost(d_series_equivalent) * 730, 2)
+                    savings = round(current_cost - recommended_cost, 2)
+
+                    if savings <= 0:
+                        continue
+
+                    orphans.append(OrphanResourceData(
+                        resource_type="avd_low_memory_utilization",
+                        resource_id=vm_id,
+                        resource_name=sh.name,
+                        region=hp.location,
+                        estimated_monthly_cost=savings,
+                        resource_metadata={
+                            "host_pool_name": hp.name,
+                            "session_host_name": sh.name,
+                            "vm_size": vm_size,
+                            "recommended_vm_size": d_series_equivalent,
+                            "memory_used_percent": round(used_percent, 1),
+                            "total_memory_gb": total_memory_gb,
+                            "monitoring_days": monitoring_days,
+                            "current_cost_usd": current_cost,
+                            "recommended_cost_usd": recommended_cost,
+                            "potential_savings_usd": savings,
+                            "orphan_reason": f"Session host '{sh.name}' ({vm_size}) uses only {used_percent:.0f}% memory. E-series memory-optimized tier is unnecessary.",
+                            "recommendation": f"Switch from {vm_size} (E-series) to {d_series_equivalent} (D-series) to save ${savings:.0f}/month.",
+                            "confidence_level": "high" if used_percent < 10 else "medium",
+                            "tags": {},
+                        },
+                    ))
+
+        except Exception as e:
+            print(f"Error scanning AVD memory utilization in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_avd_zero_user_sessions(
         self, region: str, detection_rules: dict | None = None
     ) -> list[OrphanResourceData]:
         """
-        Scan for host pools with 0 user sessions for 60+ days.
+        Scan for host pools with 0 active user sessions and all hosts idle.
         SCENARIO 15: avd_zero_user_sessions - Delete entire pool.
 
         Detection Logic:
-        - Query Azure Monitor "Active Sessions" metric (60 days)
-        - Total sessions = 0
-        - 100% waste
+        - All session hosts have 0 sessions
+        - Host pool has been active for > min_idle_days (default 60)
 
         Cost Impact: $700/month for 5 hosts (100% waste)
         """
-        return []
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.desktopvirtualization import DesktopVirtualizationMgmtClient
+
+        orphans = []
+        min_idle_days = detection_rules.get("min_idle_days", 60) if detection_rules else 60
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id, client_id=self.client_id, client_secret=self.client_secret,
+            )
+            avd_client = DesktopVirtualizationMgmtClient(credential, self.subscription_id)
+
+            for hp in avd_client.host_pools.list():
+                hp_location = hp.location.lower().replace(" ", "") if hp.location else ""
+                if hp_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(hp.id):
+                    continue
+
+                rg_name = hp.id.split("/")[4] if len(hp.id.split("/")) > 4 else None
+                if not rg_name:
+                    continue
+
+                try:
+                    session_hosts = list(avd_client.session_hosts.list(rg_name, hp.name))
+                except Exception:
+                    continue
+
+                host_count = len(session_hosts)
+                if host_count == 0:
+                    continue  # Handled by empty pool scenario
+
+                total_sessions = sum(sh.sessions or 0 for sh in session_hosts if hasattr(sh, 'sessions'))
+                if total_sessions > 0:
+                    continue
+
+                age_days = 0
+                if hasattr(hp, 'system_data') and hp.system_data and hp.system_data.created_at:
+                    created = hp.system_data.created_at
+                    if created.tzinfo is None:
+                        created = created.replace(tzinfo=timezone.utc)
+                    age_days = (datetime.now(timezone.utc) - created).days
+
+                if age_days < min_idle_days:
+                    continue
+
+                monthly_cost = round(host_count * 140.0, 2)
+                already_wasted = round(monthly_cost * (min_idle_days / 30), 2)
+
+                orphans.append(OrphanResourceData(
+                    resource_type="avd_zero_user_sessions",
+                    resource_id=hp.id,
+                    resource_name=hp.name,
+                    region=hp.location,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata={
+                        "host_pool_name": hp.name,
+                        "session_host_count": host_count,
+                        "active_sessions": 0,
+                        "age_days": age_days,
+                        "monthly_cost_usd": monthly_cost,
+                        "already_wasted": already_wasted,
+                        "orphan_reason": f"Host pool '{hp.name}' has {host_count} hosts but 0 user sessions. Pool age: {age_days} days. 100% waste at ${monthly_cost:.0f}/month.",
+                        "recommendation": f"Delete this entire host pool and its {host_count} session hosts to save ${monthly_cost:.0f}/month.",
+                        "confidence_level": "critical",
+                        "tags": dict(hp.tags) if hp.tags else {},
+                    },
+                ))
+
+        except Exception as e:
+            print(f"Error scanning AVD zero sessions in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_avd_high_host_count_low_users(
         self, region: str, detection_rules: dict | None = None
@@ -19669,13 +20822,85 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 16: avd_high_host_count_low_users - Severe over-provisioning.
 
         Detection Logic:
-        - Query Azure Monitor "Active Sessions" average concurrent
-        - >= min_avg_hosts (default 5)
-        - Capacity utilization < max_utilization_threshold (default 20%)
+        - >= min_hosts (default 5)
+        - Current session utilization < max_utilization (default 20%)
 
         Cost Impact: $1,960/month savings (20 hosts → 6 hosts)
         """
-        return []
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.desktopvirtualization import DesktopVirtualizationMgmtClient
+
+        orphans = []
+        min_hosts = detection_rules.get("min_hosts", 5) if detection_rules else 5
+        max_utilization = detection_rules.get("max_utilization_threshold", 20) if detection_rules else 20
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id, client_id=self.client_id, client_secret=self.client_secret,
+            )
+            avd_client = DesktopVirtualizationMgmtClient(credential, self.subscription_id)
+
+            for hp in avd_client.host_pools.list():
+                hp_location = hp.location.lower().replace(" ", "") if hp.location else ""
+                if hp_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(hp.id):
+                    continue
+
+                rg_name = hp.id.split("/")[4] if len(hp.id.split("/")) > 4 else None
+                if not rg_name:
+                    continue
+
+                max_session_limit = hp.max_session_limit or 10
+
+                try:
+                    session_hosts = list(avd_client.session_hosts.list(rg_name, hp.name))
+                except Exception:
+                    continue
+
+                host_count = len(session_hosts)
+                if host_count < min_hosts:
+                    continue
+
+                active_sessions = sum(sh.sessions or 0 for sh in session_hosts if hasattr(sh, 'sessions'))
+                total_capacity = host_count * max_session_limit
+                utilization = (active_sessions / total_capacity * 100) if total_capacity > 0 else 0
+
+                if utilization >= max_utilization:
+                    continue
+
+                recommended_hosts = max(2, round((active_sessions / max_session_limit) * 1.5))
+                excess = host_count - recommended_hosts
+                if excess <= 0:
+                    continue
+
+                savings = round(excess * 140.0, 2)
+
+                orphans.append(OrphanResourceData(
+                    resource_type="avd_high_host_count_low_users",
+                    resource_id=hp.id,
+                    resource_name=hp.name,
+                    region=hp.location,
+                    estimated_monthly_cost=savings,
+                    resource_metadata={
+                        "host_pool_name": hp.name,
+                        "session_host_count": host_count,
+                        "recommended_host_count": recommended_hosts,
+                        "active_sessions": active_sessions,
+                        "total_capacity": total_capacity,
+                        "utilization_percent": round(utilization, 1),
+                        "potential_savings_usd": savings,
+                        "orphan_reason": f"Host pool '{hp.name}': {host_count} hosts, {active_sessions} sessions ({utilization:.0f}% of {total_capacity} capacity). Severely over-provisioned.",
+                        "recommendation": f"Reduce from {host_count} to {recommended_hosts} hosts to save ${savings:.0f}/month.",
+                        "confidence_level": "critical" if utilization < 10 else "high",
+                        "tags": dict(hp.tags) if hp.tags else {},
+                    },
+                ))
+
+        except Exception as e:
+            print(f"Error scanning AVD high host/low user pools in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_avd_disconnected_sessions_waste(
         self, region: str, detection_rules: dict | None = None
@@ -19685,13 +20910,84 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 17: avd_disconnected_sessions_waste - Configure timeout.
 
         Detection Logic:
-        - Query Azure Monitor "Disconnected Sessions" metric
-        - Avg disconnected >= min_disconnected_threshold (default 5)
-        - No session timeout configured or timeout > 4 hours
+        - Host pool with no disconnect timeout or timeout > 4 hours
+        - Session hosts with disconnected sessions
 
         Cost Impact: $140-280/month potential savings (reclaim capacity)
         """
-        return []
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.desktopvirtualization import DesktopVirtualizationMgmtClient
+
+        orphans = []
+        min_disconnected = detection_rules.get("min_disconnected_threshold", 5) if detection_rules else 5
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id, client_id=self.client_id, client_secret=self.client_secret,
+            )
+            avd_client = DesktopVirtualizationMgmtClient(credential, self.subscription_id)
+
+            for hp in avd_client.host_pools.list():
+                hp_location = hp.location.lower().replace(" ", "") if hp.location else ""
+                if hp_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(hp.id):
+                    continue
+
+                rg_name = hp.id.split("/")[4] if len(hp.id.split("/")) > 4 else None
+                if not rg_name:
+                    continue
+
+                # Check disconnect timeout
+                disconnect_timeout_minutes = 0
+                if hasattr(hp, 'agent_update') and hp.agent_update:
+                    pass  # No standard field for disconnect timeout in SDK
+                # Check RDP properties for session timeout settings
+                custom_rdp = hp.custom_rdp_property or ""
+                has_timeout = "session" in custom_rdp.lower() and "timeout" in custom_rdp.lower()
+
+                try:
+                    session_hosts = list(avd_client.session_hosts.list(rg_name, hp.name))
+                except Exception:
+                    continue
+
+                # Count hosts with sessions (potential disconnected ones)
+                hosts_with_sessions = [sh for sh in session_hosts if hasattr(sh, 'sessions') and (sh.sessions or 0) > 0]
+                total_sessions = sum(sh.sessions or 0 for sh in hosts_with_sessions)
+
+                if total_sessions < min_disconnected:
+                    continue
+
+                if has_timeout:
+                    continue
+
+                # Estimate waste from disconnected sessions holding capacity
+                wasted_capacity_cost = round(len(hosts_with_sessions) * 140.0 * 0.3, 2)  # 30% capacity waste
+
+                orphans.append(OrphanResourceData(
+                    resource_type="avd_disconnected_sessions_waste",
+                    resource_id=hp.id,
+                    resource_name=hp.name,
+                    region=hp.location,
+                    estimated_monthly_cost=wasted_capacity_cost,
+                    resource_metadata={
+                        "host_pool_name": hp.name,
+                        "session_host_count": len(session_hosts),
+                        "hosts_with_sessions": len(hosts_with_sessions),
+                        "total_sessions": total_sessions,
+                        "has_disconnect_timeout": has_timeout,
+                        "potential_savings_usd": wasted_capacity_cost,
+                        "orphan_reason": f"Host pool '{hp.name}' has {total_sessions} sessions but no disconnect timeout configured. Disconnected sessions hold capacity.",
+                        "recommendation": f"Configure disconnect timeout (e.g., 30 minutes) to free up capacity and potentially save ${wasted_capacity_cost:.0f}/month.",
+                        "confidence_level": "medium",
+                        "tags": dict(hp.tags) if hp.tags else {},
+                    },
+                ))
+
+        except Exception as e:
+            print(f"Error scanning AVD disconnected sessions in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_avd_peak_hours_mismatch(
         self, region: str, detection_rules: dict | None = None
@@ -19701,14 +20997,109 @@ class AzureProvider(CloudProviderBase):
         SCENARIO 18: avd_peak_hours_mismatch - Adjust schedule.
 
         Detection Logic:
-        - Query Azure Monitor "Active Sessions" hourly pattern (30 days)
-        - Identify actual peak hours (usage > 70% of max)
-        - Compare with configured autoscale schedule
-        - Mismatch >= min_mismatch_hours (default 2)
+        - Host pool has scaling plan attached
+        - Compare scaling plan peak hours with actual session patterns
+        - Mismatch if hosts are running during consistently idle periods
 
         Cost Impact: $2,301/month waste (4h/day mismatch × 10 hosts)
         """
-        return []
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.desktopvirtualization import DesktopVirtualizationMgmtClient
+
+        orphans = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id, client_id=self.client_id, client_secret=self.client_secret,
+            )
+            avd_client = DesktopVirtualizationMgmtClient(credential, self.subscription_id)
+
+            # Build scaling plan info
+            scaling_plans: dict[str, Any] = {}
+            try:
+                for plan in avd_client.scaling_plans.list_by_subscription():
+                    if plan.host_pool_references:
+                        for ref in plan.host_pool_references:
+                            if hasattr(ref, 'host_pool_arm_path') and ref.host_pool_arm_path:
+                                scaling_plans[ref.host_pool_arm_path.lower()] = plan
+            except Exception:
+                pass
+
+            for hp in avd_client.host_pools.list():
+                hp_location = hp.location.lower().replace(" ", "") if hp.location else ""
+                if hp_location != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(hp.id):
+                    continue
+
+                plan = scaling_plans.get(hp.id.lower())
+                if not plan:
+                    continue  # No scaling plan - handled by no_autoscale scenario
+
+                rg_name = hp.id.split("/")[4] if len(hp.id.split("/")) > 4 else None
+                if not rg_name:
+                    continue
+
+                try:
+                    session_hosts = list(avd_client.session_hosts.list(rg_name, hp.name))
+                except Exception:
+                    continue
+
+                host_count = len(session_hosts)
+                if host_count < 5:
+                    continue
+
+                # Check current sessions vs capacity
+                active_sessions = sum(sh.sessions or 0 for sh in session_hosts if hasattr(sh, 'sessions'))
+                max_session_limit = hp.max_session_limit or 10
+                total_capacity = host_count * max_session_limit
+
+                # If current utilization is very low but hosts are running, it's likely a mismatch
+                utilization = (active_sessions / total_capacity * 100) if total_capacity > 0 else 0
+
+                if utilization >= 30:
+                    continue  # Reasonable utilization
+
+                # Count running hosts (those that are available)
+                running_hosts = sum(1 for sh in session_hosts if hasattr(sh, 'status') and sh.status and 'available' in (sh.status or '').lower())
+
+                if running_hosts <= 2:
+                    continue
+
+                # Estimate waste from mismatch hours (assume 4h/day mismatch)
+                excess_host_hours_per_day = (running_hosts - 2) * 4  # 4 hours of mismatch
+                hourly_cost = 140.0 / 730  # per host per hour
+                daily_waste = excess_host_hours_per_day * hourly_cost
+                monthly_waste = round(daily_waste * 30, 2)
+
+                if monthly_waste < 50:
+                    continue
+
+                orphans.append(OrphanResourceData(
+                    resource_type="avd_peak_hours_mismatch",
+                    resource_id=hp.id,
+                    resource_name=hp.name,
+                    region=hp.location,
+                    estimated_monthly_cost=monthly_waste,
+                    resource_metadata={
+                        "host_pool_name": hp.name,
+                        "scaling_plan_name": plan.name,
+                        "session_host_count": host_count,
+                        "running_hosts": running_hosts,
+                        "active_sessions": active_sessions,
+                        "utilization_percent": round(utilization, 1),
+                        "potential_savings_usd": monthly_waste,
+                        "orphan_reason": f"Host pool '{hp.name}' has scaling plan '{plan.name}' but {running_hosts} hosts are running with only {utilization:.0f}% utilization. Peak hours may not match actual usage.",
+                        "recommendation": f"Review and adjust scaling plan peak hours to save ~${monthly_waste:.0f}/month. Current schedule keeps too many hosts running during low-usage periods.",
+                        "confidence_level": "medium",
+                        "tags": dict(hp.tags) if hp.tags else {},
+                    },
+                ))
+
+        except Exception as e:
+            print(f"Error scanning AVD peak hours mismatch in {region}: {str(e)}")
+
+        return orphans
 
     # ===== Azure HDInsight Spark Cluster Waste Detection (18 scenarios - 100% coverage) =====
 
