@@ -396,6 +396,116 @@ class AzureProvider(CloudProviderBase):
         }
         return gateway_costs.get(sku_name, 139.0)
 
+    def _calculate_flexible_server_cost(self, sku_name: str, storage_gb: int = 32) -> float:
+        """
+        Calculate monthly cost for Azure Database for PostgreSQL/MySQL Flexible Server.
+
+        Azure Flexible Server pricing (approximate, US East 2025):
+        Burstable:
+        - Standard_B1ms (1 vCore, 2GB): $13/month
+        - Standard_B2s (2 vCores, 4GB): $26/month
+        - Standard_B2ms (2 vCores, 8GB): $52/month
+        - Standard_B4ms (4 vCores, 16GB): $104/month
+        General Purpose:
+        - Standard_D2s_v3 / Standard_D2ds_v4 (2 vCores): $125/month
+        - Standard_D4s_v3 / Standard_D4ds_v4 (4 vCores): $250/month
+        - Standard_D8s_v3 / Standard_D8ds_v4 (8 vCores): $500/month
+        - Standard_D16s_v3 / Standard_D16ds_v4 (16 vCores): $1,000/month
+        Memory Optimized:
+        - Standard_E2s_v3 / Standard_E2ds_v4 (2 vCores): $165/month
+        - Standard_E4s_v3 / Standard_E4ds_v4 (4 vCores): $330/month
+        - Standard_E8s_v3 / Standard_E8ds_v4 (8 vCores): $660/month
+        Storage: $0.115/GB/month
+
+        Args:
+            sku_name: Flexible Server SKU (e.g. 'Standard_B2s', 'Standard_D2s_v3')
+            storage_gb: Provisioned storage in GB
+
+        Returns:
+            Estimated monthly cost in USD
+        """
+        compute_costs = {
+            "Standard_B1ms": 13.0, "Standard_B1s": 8.0,
+            "Standard_B2s": 26.0, "Standard_B2ms": 52.0,
+            "Standard_B4ms": 104.0, "Standard_B8ms": 208.0,
+            "Standard_B12ms": 312.0, "Standard_B16ms": 416.0,
+            "Standard_B20ms": 520.0,
+            "Standard_D2s_v3": 125.0, "Standard_D2ds_v4": 125.0, "Standard_D2ads_v5": 125.0,
+            "Standard_D4s_v3": 250.0, "Standard_D4ds_v4": 250.0, "Standard_D4ads_v5": 250.0,
+            "Standard_D8s_v3": 500.0, "Standard_D8ds_v4": 500.0, "Standard_D8ads_v5": 500.0,
+            "Standard_D16s_v3": 1000.0, "Standard_D16ds_v4": 1000.0, "Standard_D16ads_v5": 1000.0,
+            "Standard_D32s_v3": 2000.0, "Standard_D32ds_v4": 2000.0, "Standard_D32ads_v5": 2000.0,
+            "Standard_D48s_v3": 3000.0, "Standard_D48ds_v4": 3000.0, "Standard_D48ads_v5": 3000.0,
+            "Standard_D64s_v3": 4000.0, "Standard_D64ds_v4": 4000.0, "Standard_D64ads_v5": 4000.0,
+            "Standard_E2s_v3": 165.0, "Standard_E2ds_v4": 165.0, "Standard_E2ads_v5": 165.0,
+            "Standard_E4s_v3": 330.0, "Standard_E4ds_v4": 330.0, "Standard_E4ads_v5": 330.0,
+            "Standard_E8s_v3": 660.0, "Standard_E8ds_v4": 660.0, "Standard_E8ads_v5": 660.0,
+            "Standard_E16s_v3": 1320.0, "Standard_E16ds_v4": 1320.0, "Standard_E16ads_v5": 1320.0,
+            "Standard_E32s_v3": 2640.0, "Standard_E32ds_v4": 2640.0, "Standard_E32ads_v5": 2640.0,
+            "Standard_E48s_v3": 3960.0, "Standard_E48ds_v4": 3960.0, "Standard_E48ads_v5": 3960.0,
+            "Standard_E64s_v3": 5280.0, "Standard_E64ds_v4": 5280.0, "Standard_E64ads_v5": 5280.0,
+        }
+
+        compute_cost = compute_costs.get(sku_name, 150.0)
+        storage_cost = storage_gb * 0.115
+        return round(compute_cost + storage_cost, 2)
+
+    def _get_flexible_server_tier(self, sku_name: str) -> str:
+        """Get the tier (Burstable/GeneralPurpose/MemoryOptimized) from SKU name."""
+        if not sku_name:
+            return "Unknown"
+        if sku_name.startswith("Standard_B"):
+            return "Burstable"
+        elif sku_name.startswith("Standard_E"):
+            return "MemoryOptimized"
+        elif sku_name.startswith("Standard_D"):
+            return "GeneralPurpose"
+        return "Unknown"
+
+    def _get_flexible_server_vcores(self, sku_name: str) -> int:
+        """Extract vCore count from SKU name (e.g. Standard_D4s_v3 -> 4)."""
+        if not sku_name:
+            return 2
+        try:
+            # Pattern: Standard_{series}{vcores}{suffix}
+            # e.g. Standard_D4s_v3, Standard_B2ms, Standard_E16ds_v4
+            parts = sku_name.replace("Standard_", "")
+            digits = ""
+            found_letter = False
+            for c in parts:
+                if c.isalpha() and not found_letter:
+                    found_letter = True
+                    continue
+                if found_letter and c.isdigit():
+                    digits += c
+                elif found_letter and not c.isdigit():
+                    break
+            return int(digits) if digits else 2
+        except (ValueError, IndexError):
+            return 2
+
+    def _get_recommended_lower_sku(self, current_sku: str) -> str | None:
+        """Get the next lower SKU for downgrade recommendation."""
+        downgrade_map = {
+            "Standard_B2s": "Standard_B1ms", "Standard_B2ms": "Standard_B2s",
+            "Standard_B4ms": "Standard_B2ms", "Standard_B8ms": "Standard_B4ms",
+            "Standard_B12ms": "Standard_B8ms", "Standard_B16ms": "Standard_B12ms",
+            "Standard_B20ms": "Standard_B16ms",
+            "Standard_D4s_v3": "Standard_D2s_v3", "Standard_D4ds_v4": "Standard_D2ds_v4",
+            "Standard_D8s_v3": "Standard_D4s_v3", "Standard_D8ds_v4": "Standard_D4ds_v4",
+            "Standard_D16s_v3": "Standard_D8s_v3", "Standard_D16ds_v4": "Standard_D8ds_v4",
+            "Standard_D32s_v3": "Standard_D16s_v3", "Standard_D32ds_v4": "Standard_D16ds_v4",
+            "Standard_D48s_v3": "Standard_D32s_v3", "Standard_D48ds_v4": "Standard_D32ds_v4",
+            "Standard_D64s_v3": "Standard_D48s_v3", "Standard_D64ds_v4": "Standard_D48ds_v4",
+            "Standard_E4s_v3": "Standard_E2s_v3", "Standard_E4ds_v4": "Standard_E2ds_v4",
+            "Standard_E8s_v3": "Standard_E4s_v3", "Standard_E8ds_v4": "Standard_E4ds_v4",
+            "Standard_E16s_v3": "Standard_E8s_v3", "Standard_E16ds_v4": "Standard_E8ds_v4",
+            "Standard_E32s_v3": "Standard_E16s_v3", "Standard_E32ds_v4": "Standard_E16ds_v4",
+            "Standard_E48s_v3": "Standard_E32s_v3", "Standard_E48ds_v4": "Standard_E32ds_v4",
+            "Standard_E64s_v3": "Standard_E48s_v3", "Standard_E64ds_v4": "Standard_E48ds_v4",
+        }
+        return downgrade_map.get(current_sku)
+
     def _get_vm_hourly_cost(self, vm_size: str) -> float:
         """
         Get hourly cost for Azure VM sizes (approximate US East pricing 2025).
@@ -9478,35 +9588,340 @@ class AzureProvider(CloudProviderBase):
         self, region: str, detection_rules: dict | None = None
     ) -> list[OrphanResourceData]:
         """
-        Scan for Azure PostgreSQL/MySQL with zero connections.
+        Scan for Azure PostgreSQL/MySQL Flexible Servers with zero connections over monitoring period.
+
+        Uses Azure Monitor metrics (active_connections) to detect servers with 0 connections.
 
         Args:
             region: Azure region to scan
             detection_rules: Optional detection configuration
+                - monitoring_days: Observation period (default: 30)
+                - max_connections_threshold: Max connections to consider idle (default: 0)
 
         Returns:
             List of orphan PostgreSQL/MySQL resources
         """
-        # Implementation similar to SQL Database idle connections
-        # Placeholder for MVP - returns empty list
-        return []
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.rdbms.postgresql_flexibleservers import PostgreSQLManagementClient as PGFlexClient
+        from azure.mgmt.rdbms.mysql_flexibleservers import MySQLManagementClient as MySQLFlexClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans = []
+        monitoring_days = detection_rules.get("monitoring_days", 30) if detection_rules else 30
+        max_connections_threshold = detection_rules.get("max_connections_threshold", 0) if detection_rules else 0
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            )
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=monitoring_days)
+
+            # Scan both PostgreSQL and MySQL flexible servers
+            server_configs = [
+                ("PostgreSQL", PGFlexClient(credential, self.subscription_id)),
+                ("MySQL", MySQLFlexClient(credential, self.subscription_id)),
+            ]
+
+            for db_type, client in server_configs:
+                try:
+                    servers = list(client.servers.list())
+                except Exception:
+                    continue
+
+                for server in servers:
+                    if server.location != region:
+                        continue
+
+                    if not self._is_resource_in_scope(server.id):
+                        continue
+
+                    # Only check running servers
+                    if hasattr(server, 'state') and server.state != 'Ready':
+                        continue
+
+                    try:
+                        response = metrics_client.query_resource(
+                            resource_uri=server.id,
+                            metric_names=["active_connections"],
+                            timespan=(start_time, end_time),
+                            granularity=timedelta(hours=1),
+                            aggregations=[MetricAggregationType.MAXIMUM],
+                        )
+
+                        max_connections = 0
+                        data_points = 0
+                        if response.metrics and len(response.metrics) > 0:
+                            metric = response.metrics[0]
+                            if metric.timeseries and len(metric.timeseries) > 0:
+                                for data_point in metric.timeseries[0].data:
+                                    if data_point.maximum is not None:
+                                        data_points += 1
+                                        if data_point.maximum > max_connections:
+                                            max_connections = data_point.maximum
+
+                        if max_connections > max_connections_threshold:
+                            continue
+
+                        if data_points == 0:
+                            continue  # No data available
+
+                    except Exception as metrics_error:
+                        print(f"Warning: Cannot query metrics for {db_type} {server.name}: {str(metrics_error)}")
+                        continue
+
+                    # Calculate cost
+                    sku_name = server.sku.name if server.sku else "Standard_D2s_v3"
+                    storage_gb = 32
+                    if hasattr(server, 'storage') and server.storage:
+                        storage_gb = getattr(server.storage, 'storage_size_gb', 32) or 32
+
+                    monthly_cost = self._calculate_flexible_server_cost(sku_name, storage_gb)
+                    tier = self._get_flexible_server_tier(sku_name)
+                    vcores = self._get_flexible_server_vcores(sku_name)
+                    confidence_level = self._calculate_confidence_level(monitoring_days, detection_rules)
+
+                    orphans.append(
+                        OrphanResourceData(
+                            resource_type="postgres_mysql_idle_connections",
+                            resource_id=server.id,
+                            resource_name=server.name,
+                            region=region,
+                            estimated_monthly_cost=monthly_cost,
+                            resource_metadata={
+                                "server_id": server.id,
+                                "server_name": server.name,
+                                "database_type": db_type,
+                                "state": server.state if hasattr(server, 'state') else "Unknown",
+                                "sku_name": sku_name,
+                                "tier": tier,
+                                "vcores": vcores,
+                                "storage_gb": storage_gb,
+                                "metrics": {
+                                    "observation_period_days": monitoring_days,
+                                    "max_active_connections": int(max_connections),
+                                    "data_points": data_points,
+                                },
+                                "monthly_cost_usd": monthly_cost,
+                                "already_wasted": round(monthly_cost * (monitoring_days / 30), 2),
+                                "total_wasted_usd": round(monthly_cost * (monitoring_days / 30), 2),
+                                "orphan_reason": (
+                                    f"{db_type} Flexible Server '{server.name}' ({sku_name}, {vcores} vCores, {tier}) "
+                                    f"has 0 active connections over {monitoring_days} days. "
+                                    f"Server is running and costing ${monthly_cost:.2f}/month with zero usage. "
+                                    f"Already wasted: ${round(monthly_cost * (monitoring_days / 30), 2)}."
+                                ),
+                                "recommendation": (
+                                    f"Delete this {db_type} server if no longer needed to save ${monthly_cost:.2f}/month. "
+                                    f"If the server is needed but idle, consider stopping it (max 7 days auto-restart) "
+                                    f"or downgrading to a Burstable tier."
+                                ),
+                                "confidence_level": confidence_level,
+                                "tags": server.tags or {},
+                            },
+                        )
+                    )
+
+        except Exception as e:
+            print(f"Error scanning idle PostgreSQL/MySQL in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_postgres_mysql_over_provisioned_vcores(
         self, region: str, detection_rules: dict | None = None
     ) -> list[OrphanResourceData]:
         """
-        Scan for Azure PostgreSQL/MySQL with vCore utilization <20%.
+        Scan for Azure PostgreSQL/MySQL Flexible Servers with CPU utilization <20%.
+
+        Uses Azure Monitor cpu_percent metric to detect over-provisioned servers
+        and recommends downgrading to a lower SKU.
 
         Args:
             region: Azure region to scan
             detection_rules: Optional detection configuration
+                - monitoring_days: Observation period (default: 30)
+                - max_cpu_utilization_percent: Threshold for over-provisioned (default: 20)
 
         Returns:
             List of orphan PostgreSQL/MySQL resources
         """
-        # Implementation similar to SQL Database over-provisioned
-        # Placeholder for MVP - returns empty list
-        return []
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.rdbms.postgresql_flexibleservers import PostgreSQLManagementClient as PGFlexClient
+        from azure.mgmt.rdbms.mysql_flexibleservers import MySQLManagementClient as MySQLFlexClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans = []
+        monitoring_days = detection_rules.get("monitoring_days", 30) if detection_rules else 30
+        max_cpu_utilization = detection_rules.get("max_cpu_utilization_percent", 20.0) if detection_rules else 20.0
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            )
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=monitoring_days)
+
+            server_configs = [
+                ("PostgreSQL", PGFlexClient(credential, self.subscription_id)),
+                ("MySQL", MySQLFlexClient(credential, self.subscription_id)),
+            ]
+
+            for db_type, client in server_configs:
+                try:
+                    servers = list(client.servers.list())
+                except Exception:
+                    continue
+
+                for server in servers:
+                    if server.location != region:
+                        continue
+
+                    if not self._is_resource_in_scope(server.id):
+                        continue
+
+                    if hasattr(server, 'state') and server.state != 'Ready':
+                        continue
+
+                    sku_name = server.sku.name if server.sku else "Standard_D2s_v3"
+                    tier = self._get_flexible_server_tier(sku_name)
+
+                    # Skip Burstable servers (handled by burstable_always_bursting scenario)
+                    if tier == "Burstable":
+                        continue
+
+                    # Skip smallest SKUs that can't be downgraded
+                    recommended_sku = self._get_recommended_lower_sku(sku_name)
+                    if not recommended_sku:
+                        continue
+
+                    try:
+                        # Query cpu_percent metric
+                        response = metrics_client.query_resource(
+                            resource_uri=server.id,
+                            metric_names=["cpu_percent"],
+                            timespan=(start_time, end_time),
+                            granularity=timedelta(hours=1),
+                            aggregations=[MetricAggregationType.AVERAGE],
+                        )
+
+                        cpu_values = []
+                        if response.metrics and len(response.metrics) > 0:
+                            metric = response.metrics[0]
+                            if metric.timeseries and len(metric.timeseries) > 0:
+                                for data_point in metric.timeseries[0].data:
+                                    if data_point.average is not None:
+                                        cpu_values.append(data_point.average)
+
+                        if not cpu_values:
+                            continue
+
+                        avg_cpu = sum(cpu_values) / len(cpu_values)
+                        peak_cpu = max(cpu_values)
+
+                        if avg_cpu >= max_cpu_utilization:
+                            continue
+
+                        # Also query memory_percent for fuller picture
+                        mem_response = metrics_client.query_resource(
+                            resource_uri=server.id,
+                            metric_names=["memory_percent"],
+                            timespan=(start_time, end_time),
+                            granularity=timedelta(hours=1),
+                            aggregations=[MetricAggregationType.AVERAGE],
+                        )
+
+                        mem_values = []
+                        if mem_response.metrics and len(mem_response.metrics) > 0:
+                            metric = mem_response.metrics[0]
+                            if metric.timeseries and len(metric.timeseries) > 0:
+                                for data_point in metric.timeseries[0].data:
+                                    if data_point.average is not None:
+                                        mem_values.append(data_point.average)
+
+                        avg_memory = sum(mem_values) / len(mem_values) if mem_values else 0.0
+
+                    except Exception as metrics_error:
+                        print(f"Warning: Cannot query metrics for {db_type} {server.name}: {str(metrics_error)}")
+                        continue
+
+                    # Calculate costs and savings
+                    storage_gb = 32
+                    if hasattr(server, 'storage') and server.storage:
+                        storage_gb = getattr(server.storage, 'storage_size_gb', 32) or 32
+
+                    current_cost = self._calculate_flexible_server_cost(sku_name, storage_gb)
+                    recommended_cost = self._calculate_flexible_server_cost(recommended_sku, storage_gb)
+                    potential_savings = round(current_cost - recommended_cost, 2)
+
+                    if potential_savings <= 0:
+                        continue
+
+                    vcores = self._get_flexible_server_vcores(sku_name)
+                    recommended_vcores = self._get_flexible_server_vcores(recommended_sku)
+                    confidence_level = "high" if avg_cpu < 10 else "medium"
+                    if monitoring_days >= 60:
+                        confidence_level = "critical" if avg_cpu < 10 else "high"
+
+                    orphans.append(
+                        OrphanResourceData(
+                            resource_type="postgres_mysql_over_provisioned_vcores",
+                            resource_id=server.id,
+                            resource_name=server.name,
+                            region=region,
+                            estimated_monthly_cost=potential_savings,
+                            resource_metadata={
+                                "server_id": server.id,
+                                "server_name": server.name,
+                                "database_type": db_type,
+                                "sku_name": sku_name,
+                                "recommended_sku": recommended_sku,
+                                "tier": tier,
+                                "vcores": vcores,
+                                "recommended_vcores": recommended_vcores,
+                                "storage_gb": storage_gb,
+                                "metrics": {
+                                    "observation_period_days": monitoring_days,
+                                    "avg_cpu_percent": round(avg_cpu, 2),
+                                    "peak_cpu_percent": round(peak_cpu, 2),
+                                    "avg_memory_percent": round(avg_memory, 2),
+                                    "threshold_percent": max_cpu_utilization,
+                                    "data_points": len(cpu_values),
+                                },
+                                "current_cost_usd": current_cost,
+                                "recommended_cost_usd": recommended_cost,
+                                "potential_savings_usd": potential_savings,
+                                "orphan_reason": (
+                                    f"{db_type} Flexible Server '{server.name}' ({sku_name}, {vcores} vCores, {tier}) "
+                                    f"has avg CPU {avg_cpu:.1f}% (peak: {peak_cpu:.1f}%) over {monitoring_days} days, "
+                                    f"well below {max_cpu_utilization}% threshold. Memory: {avg_memory:.1f}%. "
+                                    f"Current cost: ${current_cost:.2f}/month. "
+                                    f"Downgrade to {recommended_sku} ({recommended_vcores} vCores) to save ${potential_savings:.2f}/month."
+                                ),
+                                "recommendation": (
+                                    f"Downgrade from {sku_name} ({vcores} vCores) to {recommended_sku} ({recommended_vcores} vCores) "
+                                    f"to save ${potential_savings:.2f}/month ({((potential_savings/current_cost)*100):.0f}% reduction). "
+                                    f"CPU utilization is only {avg_cpu:.1f}% - server is significantly over-provisioned."
+                                ),
+                                "confidence_level": confidence_level,
+                                "tags": server.tags or {},
+                            },
+                        )
+                    )
+
+        except Exception as e:
+            print(f"Error scanning over-provisioned PostgreSQL/MySQL in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_postgres_mysql_burstable_always_bursting(
         self, region: str, detection_rules: dict | None = None
@@ -9514,16 +9929,184 @@ class AzureProvider(CloudProviderBase):
         """
         Scan for Azure PostgreSQL/MySQL Burstable tier constantly bursting.
 
+        Detects Burstable-tier servers with sustained high CPU usage (>70%) indicating
+        they should upgrade to General Purpose for better performance and predictable cost.
+        Burstable VMs have limited CPU credits; constant bursting degrades performance.
+
         Args:
             region: Azure region to scan
             detection_rules: Optional detection configuration
+                - monitoring_days: Observation period (default: 14)
+                - min_avg_cpu_percent: Threshold for "always bursting" (default: 70)
 
         Returns:
-            List of orphan PostgreSQL/MySQL resources
+            List of PostgreSQL/MySQL resources that should upgrade from Burstable
         """
-        # Implementation requires Azure Monitor metrics for burstable tier
-        # Placeholder for MVP - returns empty list
-        return []
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.rdbms.postgresql_flexibleservers import PostgreSQLManagementClient as PGFlexClient
+        from azure.mgmt.rdbms.mysql_flexibleservers import MySQLManagementClient as MySQLFlexClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans = []
+        monitoring_days = detection_rules.get("monitoring_days", 14) if detection_rules else 14
+        min_avg_cpu_percent = detection_rules.get("min_avg_cpu_percent", 70.0) if detection_rules else 70.0
+
+        # Burstable → General Purpose upgrade mapping (same vCores, GP tier)
+        upgrade_map = {
+            "Standard_B1ms": "Standard_D2s_v3",    # 1→2 vCores (no 1-vCore GP)
+            "Standard_B1s": "Standard_D2s_v3",     # 1→2 vCores
+            "Standard_B2s": "Standard_D2s_v3",     # 2→2 vCores
+            "Standard_B2ms": "Standard_D2s_v3",    # 2→2 vCores
+            "Standard_B4ms": "Standard_D4s_v3",    # 4→4 vCores
+            "Standard_B8ms": "Standard_D8s_v3",    # 8→8 vCores
+            "Standard_B12ms": "Standard_D16s_v3",  # 12→16 vCores (no 12-vCore GP)
+            "Standard_B16ms": "Standard_D16s_v3",  # 16→16 vCores
+            "Standard_B20ms": "Standard_D32s_v3",  # 20→32 vCores (no 20-vCore GP)
+        }
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+            )
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=monitoring_days)
+
+            server_configs = [
+                ("PostgreSQL", PGFlexClient(credential, self.subscription_id)),
+                ("MySQL", MySQLFlexClient(credential, self.subscription_id)),
+            ]
+
+            for db_type, client in server_configs:
+                try:
+                    servers = list(client.servers.list())
+                except Exception:
+                    continue
+
+                for server in servers:
+                    if server.location != region:
+                        continue
+
+                    if not self._is_resource_in_scope(server.id):
+                        continue
+
+                    if hasattr(server, 'state') and server.state != 'Ready':
+                        continue
+
+                    sku_name = server.sku.name if server.sku else ""
+
+                    # Only target Burstable tier
+                    if self._get_flexible_server_tier(sku_name) != "Burstable":
+                        continue
+
+                    recommended_sku = upgrade_map.get(sku_name)
+                    if not recommended_sku:
+                        continue
+
+                    try:
+                        # Query cpu_percent metric
+                        response = metrics_client.query_resource(
+                            resource_uri=server.id,
+                            metric_names=["cpu_percent"],
+                            timespan=(start_time, end_time),
+                            granularity=timedelta(hours=1),
+                            aggregations=[MetricAggregationType.AVERAGE],
+                        )
+
+                        cpu_values = []
+                        if response.metrics and len(response.metrics) > 0:
+                            metric = response.metrics[0]
+                            if metric.timeseries and len(metric.timeseries) > 0:
+                                for data_point in metric.timeseries[0].data:
+                                    if data_point.average is not None:
+                                        cpu_values.append(data_point.average)
+
+                        if not cpu_values:
+                            continue
+
+                        avg_cpu = sum(cpu_values) / len(cpu_values)
+                        peak_cpu = max(cpu_values)
+
+                        # Count hours above threshold
+                        hours_above_threshold = sum(1 for v in cpu_values if v >= min_avg_cpu_percent)
+                        pct_time_bursting = (hours_above_threshold / len(cpu_values)) * 100 if cpu_values else 0
+
+                        if avg_cpu < min_avg_cpu_percent:
+                            continue
+
+                    except Exception as metrics_error:
+                        print(f"Warning: Cannot query metrics for {db_type} {server.name}: {str(metrics_error)}")
+                        continue
+
+                    # Calculate costs
+                    storage_gb = 32
+                    if hasattr(server, 'storage') and server.storage:
+                        storage_gb = getattr(server.storage, 'storage_size_gb', 32) or 32
+
+                    current_cost = self._calculate_flexible_server_cost(sku_name, storage_gb)
+                    recommended_cost = self._calculate_flexible_server_cost(recommended_sku, storage_gb)
+                    cost_increase = round(recommended_cost - current_cost, 2)
+
+                    vcores = self._get_flexible_server_vcores(sku_name)
+                    recommended_vcores = self._get_flexible_server_vcores(recommended_sku)
+                    confidence_level = "high" if avg_cpu > 85 else "medium"
+
+                    orphans.append(
+                        OrphanResourceData(
+                            resource_type="postgres_mysql_burstable_always_bursting",
+                            resource_id=server.id,
+                            resource_name=server.name,
+                            region=region,
+                            estimated_monthly_cost=cost_increase,
+                            resource_metadata={
+                                "server_id": server.id,
+                                "server_name": server.name,
+                                "database_type": db_type,
+                                "sku_name": sku_name,
+                                "recommended_sku": recommended_sku,
+                                "tier": "Burstable",
+                                "recommended_tier": "GeneralPurpose",
+                                "vcores": vcores,
+                                "recommended_vcores": recommended_vcores,
+                                "storage_gb": storage_gb,
+                                "metrics": {
+                                    "observation_period_days": monitoring_days,
+                                    "avg_cpu_percent": round(avg_cpu, 2),
+                                    "peak_cpu_percent": round(peak_cpu, 2),
+                                    "hours_above_threshold": hours_above_threshold,
+                                    "pct_time_bursting": round(pct_time_bursting, 1),
+                                    "threshold_percent": min_avg_cpu_percent,
+                                    "data_points": len(cpu_values),
+                                },
+                                "current_cost_usd": current_cost,
+                                "recommended_cost_usd": recommended_cost,
+                                "cost_increase_usd": cost_increase,
+                                "orphan_reason": (
+                                    f"{db_type} Flexible Server '{server.name}' ({sku_name}, Burstable, {vcores} vCores) "
+                                    f"has avg CPU {avg_cpu:.1f}% (peak: {peak_cpu:.1f}%) over {monitoring_days} days. "
+                                    f"Server is bursting {pct_time_bursting:.0f}% of the time, depleting CPU credits. "
+                                    f"Burstable tier is not suitable for sustained workloads - performance will degrade."
+                                ),
+                                "recommendation": (
+                                    f"Upgrade from {sku_name} (Burstable, {vcores} vCores, ${current_cost:.2f}/month) to "
+                                    f"{recommended_sku} (GeneralPurpose, {recommended_vcores} vCores, ${recommended_cost:.2f}/month). "
+                                    f"Cost increase: ${cost_increase:.2f}/month but with guaranteed CPU performance. "
+                                    f"Burstable with {avg_cpu:.1f}% avg CPU causes credit exhaustion and throttling."
+                                ),
+                                "confidence_level": confidence_level,
+                                "tags": server.tags or {},
+                            },
+                        )
+                    )
+
+        except Exception as e:
+            print(f"Error scanning burstable PostgreSQL/MySQL in {region}: {str(e)}")
+
+        return orphans
 
     async def scan_synapse_sql_pool_paused(
         self, region: str, detection_rules: dict | None = None
