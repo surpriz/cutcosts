@@ -1175,12 +1175,60 @@ class AzureProvider(CloudProviderBase):
         synapse_idle = await self.scan_synapse_sql_pool_idle_queries(region, rules.get("synapse_sql_pool_idle_queries"))
         results.extend(synapse_idle)
 
-        # Azure Cache for Redis (2 scenarios)
+        # Azure Cache for Redis (18 scenarios)
         redis_idle = await self.scan_redis_idle_cache(region, rules.get("redis_idle_cache"))
         results.extend(redis_idle)
 
         redis_oversized = await self.scan_redis_over_sized_tier(region, rules.get("redis_over_sized_tier"))
         results.extend(redis_oversized)
+
+        redis_premium_dev = await self.scan_redis_premium_in_dev(region, rules.get("redis_premium_in_dev"))
+        results.extend(redis_premium_dev)
+
+        redis_no_ssl = await self.scan_redis_non_ssl_port_enabled(region, rules.get("redis_non_ssl_port_enabled"))
+        results.extend(redis_no_ssl)
+
+        redis_no_backup = await self.scan_redis_no_backup_configured(region, rules.get("redis_no_backup_configured"))
+        results.extend(redis_no_backup)
+
+        redis_old_version = await self.scan_redis_old_version(region, rules.get("redis_old_version"))
+        results.extend(redis_old_version)
+
+        redis_no_firewall = await self.scan_redis_no_firewall_rules(region, rules.get("redis_no_firewall_rules"))
+        results.extend(redis_no_firewall)
+
+        redis_multi_cache = await self.scan_redis_multiple_caches_same_rg(region, rules.get("redis_multiple_caches_same_rg"))
+        results.extend(redis_multi_cache)
+
+        redis_no_private = await self.scan_redis_no_private_endpoint(region, rules.get("redis_no_private_endpoint"))
+        results.extend(redis_no_private)
+
+        redis_basic_prod = await self.scan_redis_basic_tier_in_production(region, rules.get("redis_basic_tier_in_production"))
+        results.extend(redis_basic_prod)
+
+        redis_low_cpu = await self.scan_redis_low_cpu_utilization(region, rules.get("redis_low_cpu_utilization"))
+        results.extend(redis_low_cpu)
+
+        redis_low_cache_hit = await self.scan_redis_low_cache_hit_ratio(region, rules.get("redis_low_cache_hit_ratio"))
+        results.extend(redis_low_cache_hit)
+
+        redis_low_ops = await self.scan_redis_low_operations_per_second(region, rules.get("redis_low_operations_per_second"))
+        results.extend(redis_low_ops)
+
+        redis_high_evictions = await self.scan_redis_high_eviction_rate(region, rules.get("redis_high_eviction_rate"))
+        results.extend(redis_high_evictions)
+
+        redis_high_frag = await self.scan_redis_high_memory_fragmentation(region, rules.get("redis_high_memory_fragmentation"))
+        results.extend(redis_high_frag)
+
+        redis_low_network = await self.scan_redis_low_network_bandwidth(region, rules.get("redis_low_network_bandwidth"))
+        results.extend(redis_low_network)
+
+        redis_high_latency = await self.scan_redis_high_server_load(region, rules.get("redis_high_server_load"))
+        results.extend(redis_high_latency)
+
+        redis_no_tls = await self.scan_redis_no_minimum_tls(region, rules.get("redis_no_minimum_tls"))
+        results.extend(redis_no_tls)
 
         # ===== Azure AKS Clusters Waste Detection (10 Scenarios) - BONUS =====
         aks_clusters = await self.scan_idle_eks_clusters(region, rules.get("azure_aks_cluster"))
@@ -10192,6 +10240,48 @@ class AzureProvider(CloudProviderBase):
         # Placeholder for MVP - returns empty list (CRITICAL priority for Phase 2)
         return []
 
+    # ===== Azure Cache for Redis Helpers =====
+
+    def _calculate_redis_cache_cost(self, sku_name: str, sku_family: str, capacity: int = 0) -> float:
+        """
+        Calculate monthly cost for Azure Cache for Redis.
+
+        Pricing tiers (US East):
+        - Basic: C0=$16, C1=$26, C2=$52, C3=$104, C4=$208, C5=$416, C6=$832
+        - Standard: C0=$52, C1=$52, C2=$104, C3=$208, C4=$416, C5=$832, C6=$1664
+        - Premium: P1=$223, P2=$446, P3=$893, P4=$1786, P5=$3571
+        """
+        basic_costs = {0: 16.0, 1: 26.0, 2: 52.0, 3: 104.0, 4: 208.0, 5: 416.0, 6: 832.0}
+        standard_costs = {0: 52.0, 1: 52.0, 2: 104.0, 3: 208.0, 4: 416.0, 5: 832.0, 6: 1664.0}
+        premium_costs = {1: 223.0, 2: 446.0, 3: 893.0, 4: 1786.0, 5: 3571.0}
+
+        name_upper = sku_name.upper() if sku_name else 'STANDARD'
+        family_upper = sku_family.upper() if sku_family else 'C'
+
+        if name_upper == 'BASIC':
+            return basic_costs.get(capacity, 52.0)
+        elif name_upper == 'PREMIUM' or family_upper == 'P':
+            return premium_costs.get(capacity, 223.0)
+        else:  # Standard
+            return standard_costs.get(capacity, 104.0)
+
+    def _get_redis_recommended_downsize(self, sku_name: str, sku_family: str, capacity: int) -> dict | None:
+        """Get recommended smaller Redis tier."""
+        name_upper = sku_name.upper() if sku_name else 'STANDARD'
+
+        if name_upper == 'PREMIUM':
+            if capacity > 1:
+                return {'sku_name': 'Premium', 'family': 'P', 'capacity': capacity - 1}
+            return {'sku_name': 'Standard', 'family': 'C', 'capacity': 6}
+        elif name_upper == 'STANDARD':
+            if capacity > 0:
+                return {'sku_name': 'Standard', 'family': 'C', 'capacity': capacity - 1}
+            return {'sku_name': 'Basic', 'family': 'C', 'capacity': 0}
+        elif name_upper == 'BASIC':
+            if capacity > 0:
+                return {'sku_name': 'Basic', 'family': 'C', 'capacity': capacity - 1}
+        return None
+
     async def scan_redis_idle_cache(
         self, region: str, detection_rules: dict | None = None
     ) -> list[OrphanResourceData]:
@@ -10372,6 +10462,1362 @@ class AzureProvider(CloudProviderBase):
 
         except Exception as e:
             print(f"Error scanning over-sized Redis caches in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_redis_premium_in_dev(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Premium/Standard tier Redis in dev/test environments.
+        SCENARIO 3: redis_premium_in_dev - Downgrade to save 75%.
+
+        Detection Logic:
+        - Redis SKU is Premium or Standard
+        - Resource group or cache name indicates dev/test/staging
+
+        Cost Impact: $171/month (Premium P1 $223 -> Basic C2 $52)
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.redis import RedisManagementClient
+
+        orphans: list[OrphanResourceData] = []
+        dev_keywords = ['dev', 'test', 'staging', 'sandbox', 'poc', 'demo', 'lab', 'trial', 'qa']
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            redis_client = RedisManagementClient(credential, self.subscription_id)
+
+            for cache in redis_client.redis.list():
+                if cache.location != region:
+                    continue
+                if not self._is_resource_in_scope(cache.id):
+                    continue
+
+                sku_name = cache.sku.name if cache.sku else 'Basic'
+                if sku_name.upper() == 'BASIC':
+                    continue
+
+                cache_name_lower = cache.name.lower()
+                rg_name = cache.id.split('/')[4].lower() if cache.id and len(cache.id.split('/')) > 4 else ''
+                tags = cache.tags or {}
+                tag_values = ' '.join(str(v).lower() for v in tags.values())
+
+                is_dev = any(
+                    kw in name
+                    for kw in dev_keywords
+                    for name in (cache_name_lower, rg_name, tag_values)
+                )
+                if not is_dev:
+                    continue
+
+                sku_family = cache.sku.family if cache.sku else 'C'
+                capacity = cache.sku.capacity if cache.sku else 0
+                current_cost = self._calculate_redis_cache_cost(sku_name, sku_family, capacity)
+                dev_cost = self._calculate_redis_cache_cost('Basic', 'C', 2)
+                savings = current_cost - dev_cost
+
+                metadata = {
+                    'cache_name': cache.name,
+                    'cache_id': cache.id,
+                    'sku': f"{sku_name} {sku_family}{capacity}",
+                    'resource_group': rg_name,
+                    'is_dev_environment': True,
+                    'recommended_sku': 'Basic C2',
+                    'estimated_savings': round(savings, 2),
+                    'orphan_reason': f"Redis '{cache.name}' ({sku_name} {sku_family}{capacity}) in dev/test environment",
+                    'recommendation': f'Downgrade to Basic C2 to save ~${savings:.0f}/month in non-production',
+                    'confidence_level': 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='redis_premium_in_dev',
+                    resource_id=cache.id,
+                    resource_name=cache.name,
+                    region=region,
+                    estimated_monthly_cost=current_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning premium Redis in dev in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_redis_non_ssl_port_enabled(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Redis caches with non-SSL port (6379) enabled.
+        SCENARIO 4: redis_non_ssl_port_enabled - Security risk.
+
+        Detection Logic:
+        - enableNonSslPort = true
+        - Exposes unencrypted traffic
+
+        Cost Impact: Security risk + compliance issue
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.redis import RedisManagementClient
+
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            redis_client = RedisManagementClient(credential, self.subscription_id)
+
+            for cache in redis_client.redis.list():
+                if cache.location != region:
+                    continue
+                if not self._is_resource_in_scope(cache.id):
+                    continue
+
+                if not cache.enable_non_ssl_port:
+                    continue
+
+                sku_name = cache.sku.name if cache.sku else 'Standard'
+                sku_family = cache.sku.family if cache.sku else 'C'
+                capacity = cache.sku.capacity if cache.sku else 0
+                monthly_cost = self._calculate_redis_cache_cost(sku_name, sku_family, capacity)
+
+                metadata = {
+                    'cache_name': cache.name,
+                    'cache_id': cache.id,
+                    'sku': f"{sku_name} {sku_family}{capacity}",
+                    'enable_non_ssl_port': True,
+                    'ssl_port': cache.ssl_port,
+                    'port': cache.port,
+                    'orphan_reason': f"Redis '{cache.name}' has non-SSL port (6379) enabled - security risk",
+                    'recommendation': 'Disable non-SSL port to enforce encrypted connections',
+                    'confidence_level': 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='redis_non_ssl_port_enabled',
+                    resource_id=cache.id,
+                    resource_name=cache.name,
+                    region=region,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning non-SSL Redis caches in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_redis_no_backup_configured(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Premium Redis without backup (RDB persistence) configured.
+        SCENARIO 5: redis_no_backup_configured - Data loss risk.
+
+        Detection Logic:
+        - Premium tier cache
+        - No RDB backup schedule configured
+
+        Cost Impact: Data loss risk for Premium-tier cache
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.redis import RedisManagementClient
+
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            redis_client = RedisManagementClient(credential, self.subscription_id)
+
+            for cache in redis_client.redis.list():
+                if cache.location != region:
+                    continue
+                if not self._is_resource_in_scope(cache.id):
+                    continue
+
+                sku_name = cache.sku.name if cache.sku else 'Basic'
+                if sku_name.upper() != 'PREMIUM':
+                    continue
+
+                # Check RDB backup configuration
+                redis_config = cache.redis_configuration or {}
+                rdb_enabled = redis_config.get('rdb-backup-enabled', 'false')
+                if str(rdb_enabled).lower() == 'true':
+                    continue
+
+                sku_family = cache.sku.family if cache.sku else 'P'
+                capacity = cache.sku.capacity if cache.sku else 1
+                monthly_cost = self._calculate_redis_cache_cost(sku_name, sku_family, capacity)
+
+                metadata = {
+                    'cache_name': cache.name,
+                    'cache_id': cache.id,
+                    'sku': f"{sku_name} {sku_family}{capacity}",
+                    'rdb_backup_enabled': False,
+                    'orphan_reason': f"Premium Redis '{cache.name}' has no backup configured - data loss risk",
+                    'recommendation': 'Enable RDB backup to protect against data loss',
+                    'confidence_level': 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='redis_no_backup_configured',
+                    resource_id=cache.id,
+                    resource_name=cache.name,
+                    region=region,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning Redis without backup in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_redis_old_version(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Redis caches running old Redis version.
+        SCENARIO 6: redis_old_version - Security/performance risk.
+
+        Detection Logic:
+        - Redis version < min_version (default 6)
+        - Old versions miss security patches and features
+
+        Cost Impact: Security risk + missing features
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.redis import RedisManagementClient
+
+        orphans: list[OrphanResourceData] = []
+        min_version = detection_rules.get("min_redis_version", 6) if detection_rules else 6
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            redis_client = RedisManagementClient(credential, self.subscription_id)
+
+            for cache in redis_client.redis.list():
+                if cache.location != region:
+                    continue
+                if not self._is_resource_in_scope(cache.id):
+                    continue
+
+                redis_version = cache.redis_version or ''
+                try:
+                    major_version = int(redis_version.split('.')[0]) if redis_version else 0
+                except (ValueError, IndexError):
+                    major_version = 0
+
+                if major_version == 0 or major_version >= min_version:
+                    continue
+
+                sku_name = cache.sku.name if cache.sku else 'Standard'
+                sku_family = cache.sku.family if cache.sku else 'C'
+                capacity = cache.sku.capacity if cache.sku else 0
+                monthly_cost = self._calculate_redis_cache_cost(sku_name, sku_family, capacity)
+
+                metadata = {
+                    'cache_name': cache.name,
+                    'cache_id': cache.id,
+                    'sku': f"{sku_name} {sku_family}{capacity}",
+                    'redis_version': redis_version,
+                    'min_recommended_version': min_version,
+                    'orphan_reason': f"Redis '{cache.name}' running version {redis_version} (< {min_version}) - security risk",
+                    'recommendation': f'Upgrade to Redis {min_version}+ for security patches and performance',
+                    'confidence_level': 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='redis_old_version',
+                    resource_id=cache.id,
+                    resource_name=cache.name,
+                    region=region,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning old Redis versions in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_redis_no_firewall_rules(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Redis caches with no firewall rules (open to all).
+        SCENARIO 7: redis_no_firewall_rules - Security risk.
+
+        Detection Logic:
+        - No firewall rules configured
+        - No private endpoint configured
+        - Cache is publicly accessible
+
+        Cost Impact: Security risk
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.redis import RedisManagementClient
+
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            redis_client = RedisManagementClient(credential, self.subscription_id)
+
+            for cache in redis_client.redis.list():
+                if cache.location != region:
+                    continue
+                if not self._is_resource_in_scope(cache.id):
+                    continue
+
+                rg_name = cache.id.split('/')[4] if cache.id and len(cache.id.split('/')) > 4 else ''
+                if not rg_name:
+                    continue
+
+                # Check firewall rules
+                has_firewall = False
+                try:
+                    rules_list = list(redis_client.firewall_rules.list(rg_name, cache.name))
+                    has_firewall = len(rules_list) > 0
+                except Exception:
+                    pass
+
+                # Check private endpoints
+                has_private_endpoint = bool(cache.private_endpoint_connections)
+
+                if has_firewall or has_private_endpoint:
+                    continue
+
+                # Check if public access is disabled
+                public_access = getattr(cache, 'public_network_access', 'Enabled')
+                if str(public_access).lower() == 'disabled':
+                    continue
+
+                sku_name = cache.sku.name if cache.sku else 'Standard'
+                sku_family = cache.sku.family if cache.sku else 'C'
+                capacity = cache.sku.capacity if cache.sku else 0
+                monthly_cost = self._calculate_redis_cache_cost(sku_name, sku_family, capacity)
+
+                metadata = {
+                    'cache_name': cache.name,
+                    'cache_id': cache.id,
+                    'sku': f"{sku_name} {sku_family}{capacity}",
+                    'has_firewall_rules': False,
+                    'has_private_endpoint': False,
+                    'public_network_access': str(public_access),
+                    'orphan_reason': f"Redis '{cache.name}' has no firewall rules and no private endpoint - publicly accessible",
+                    'recommendation': 'Add firewall rules or configure private endpoint to restrict access',
+                    'confidence_level': 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='redis_no_firewall_rules',
+                    resource_id=cache.id,
+                    resource_name=cache.name,
+                    region=region,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning Redis without firewall in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_redis_multiple_caches_same_rg(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for multiple Redis caches in same resource group (consolidation).
+        SCENARIO 8: redis_multiple_caches_same_rg - Consolidate to save.
+
+        Detection Logic:
+        - Multiple caches in same resource group
+        - Similar tiers that could be consolidated
+
+        Cost Impact: $52-208/month per duplicate cache
+        """
+        from collections import defaultdict
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.redis import RedisManagementClient
+
+        orphans: list[OrphanResourceData] = []
+        min_caches = detection_rules.get("min_caches_per_rg", 2) if detection_rules else 2
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            redis_client = RedisManagementClient(credential, self.subscription_id)
+
+            rg_caches: dict[str, list] = defaultdict(list)
+
+            for cache in redis_client.redis.list():
+                if cache.location != region:
+                    continue
+                if not self._is_resource_in_scope(cache.id):
+                    continue
+                rg_name = cache.id.split('/')[4] if cache.id and len(cache.id.split('/')) > 4 else ''
+                if rg_name:
+                    rg_caches[rg_name].append(cache)
+
+            for rg_name, caches in rg_caches.items():
+                if len(caches) < min_caches:
+                    continue
+
+                total_cost = sum(
+                    self._calculate_redis_cache_cost(
+                        c.sku.name if c.sku else 'Standard',
+                        c.sku.family if c.sku else 'C',
+                        c.sku.capacity if c.sku else 0
+                    ) for c in caches
+                )
+
+                sorted_caches = sorted(
+                    caches,
+                    key=lambda c: self._calculate_redis_cache_cost(
+                        c.sku.name if c.sku else 'Standard',
+                        c.sku.family if c.sku else 'C',
+                        c.sku.capacity if c.sku else 0
+                    ),
+                    reverse=True
+                )
+
+                for cache in sorted_caches[1:]:
+                    sku_name = cache.sku.name if cache.sku else 'Standard'
+                    sku_family = cache.sku.family if cache.sku else 'C'
+                    capacity = cache.sku.capacity if cache.sku else 0
+                    cache_cost = self._calculate_redis_cache_cost(sku_name, sku_family, capacity)
+
+                    metadata = {
+                        'cache_name': cache.name,
+                        'cache_id': cache.id,
+                        'sku': f"{sku_name} {sku_family}{capacity}",
+                        'resource_group': rg_name,
+                        'total_caches_in_rg': len(caches),
+                        'cache_names': [c.name for c in caches],
+                        'total_cost_all_caches': round(total_cost, 2),
+                        'orphan_reason': f"Resource group '{rg_name}' has {len(caches)} Redis caches - consolidation possible",
+                        'recommendation': f'Consolidate {len(caches)} caches to save ~${cache_cost:.0f}/month',
+                        'confidence_level': 'medium',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='redis_multiple_caches_same_rg',
+                        resource_id=cache.id,
+                        resource_name=cache.name,
+                        region=region,
+                        estimated_monthly_cost=cache_cost,
+                        resource_metadata=metadata
+                    ))
+        except Exception as e:
+            print(f"Error scanning multiple Redis caches in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_redis_no_private_endpoint(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Premium Redis without private endpoint.
+        SCENARIO 9: redis_no_private_endpoint - Security/compliance gap.
+
+        Detection Logic:
+        - Premium tier cache
+        - No private endpoint connections configured
+        - Public network access enabled
+
+        Cost Impact: Compliance risk for premium workload
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.redis import RedisManagementClient
+
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            redis_client = RedisManagementClient(credential, self.subscription_id)
+
+            for cache in redis_client.redis.list():
+                if cache.location != region:
+                    continue
+                if not self._is_resource_in_scope(cache.id):
+                    continue
+
+                sku_name = cache.sku.name if cache.sku else 'Basic'
+                if sku_name.upper() != 'PREMIUM':
+                    continue
+
+                if cache.private_endpoint_connections:
+                    continue
+
+                sku_family = cache.sku.family if cache.sku else 'P'
+                capacity = cache.sku.capacity if cache.sku else 1
+                monthly_cost = self._calculate_redis_cache_cost(sku_name, sku_family, capacity)
+
+                metadata = {
+                    'cache_name': cache.name,
+                    'cache_id': cache.id,
+                    'sku': f"{sku_name} {sku_family}{capacity}",
+                    'has_private_endpoint': False,
+                    'orphan_reason': f"Premium Redis '{cache.name}' has no private endpoint - public exposure risk",
+                    'recommendation': 'Configure private endpoint for Premium tier cache to meet security requirements',
+                    'confidence_level': 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='redis_no_private_endpoint',
+                    resource_id=cache.id,
+                    resource_name=cache.name,
+                    region=region,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning Redis without private endpoint in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_redis_basic_tier_in_production(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Basic tier Redis in production (no SLA, no replication).
+        SCENARIO 10: redis_basic_tier_in_production - No HA, no SLA.
+
+        Detection Logic:
+        - Basic tier cache
+        - Resource group/name does NOT contain dev/test/staging
+        - Basic tier has no SLA, no replication, single node
+
+        Cost Impact: Risk of downtime in production
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.redis import RedisManagementClient
+
+        orphans: list[OrphanResourceData] = []
+        dev_keywords = ['dev', 'test', 'staging', 'sandbox', 'poc', 'demo', 'lab', 'trial', 'qa']
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            redis_client = RedisManagementClient(credential, self.subscription_id)
+
+            for cache in redis_client.redis.list():
+                if cache.location != region:
+                    continue
+                if not self._is_resource_in_scope(cache.id):
+                    continue
+
+                sku_name = cache.sku.name if cache.sku else 'Standard'
+                if sku_name.upper() != 'BASIC':
+                    continue
+
+                cache_name_lower = cache.name.lower()
+                rg_name = cache.id.split('/')[4].lower() if cache.id and len(cache.id.split('/')) > 4 else ''
+                tags = cache.tags or {}
+                tag_values = ' '.join(str(v).lower() for v in tags.values())
+
+                is_dev = any(
+                    kw in name
+                    for kw in dev_keywords
+                    for name in (cache_name_lower, rg_name, tag_values)
+                )
+                if is_dev:
+                    continue  # Basic in dev is fine
+
+                sku_family = cache.sku.family if cache.sku else 'C'
+                capacity = cache.sku.capacity if cache.sku else 0
+                current_cost = self._calculate_redis_cache_cost(sku_name, sku_family, capacity)
+                standard_cost = self._calculate_redis_cache_cost('Standard', 'C', capacity)
+                upgrade_cost = standard_cost - current_cost
+
+                metadata = {
+                    'cache_name': cache.name,
+                    'cache_id': cache.id,
+                    'sku': f"{sku_name} {sku_family}{capacity}",
+                    'resource_group': rg_name,
+                    'is_production': True,
+                    'has_sla': False,
+                    'has_replication': False,
+                    'upgrade_to': f'Standard C{capacity}',
+                    'upgrade_cost': round(upgrade_cost, 2),
+                    'orphan_reason': f"Basic tier Redis '{cache.name}' in production - no SLA, no replication",
+                    'recommendation': f'Upgrade to Standard C{capacity} for SLA and replication (+${upgrade_cost:.0f}/month)',
+                    'confidence_level': 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='redis_basic_tier_in_production',
+                    resource_id=cache.id,
+                    resource_name=cache.name,
+                    region=region,
+                    estimated_monthly_cost=current_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning Basic tier Redis in production in {region}: {str(e)}")
+
+        return orphans
+
+    # Phase 2 - Redis Metrics-based detection (8 scenarios)
+
+    async def scan_redis_low_cpu_utilization(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Redis with CPU utilization <10% avg over 30 days.
+        SCENARIO 11: redis_low_cpu_utilization - Over-provisioned.
+
+        Detection Logic:
+        - Azure Monitor: percentProcessorTime < max_cpu (default 10%)
+        - Observation: min_observation_days (default 30)
+
+        Cost Impact: 50% savings by downsizing tier
+        """
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.redis import RedisManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans: list[OrphanResourceData] = []
+        max_cpu = detection_rules.get("max_avg_cpu_percent", 10) if detection_rules else 10
+        observation_days = detection_rules.get("min_observation_days", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            redis_client = RedisManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+
+            for cache in redis_client.redis.list():
+                if cache.location != region:
+                    continue
+                if not self._is_resource_in_scope(cache.id):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        cache.id,
+                        metric_names=["percentProcessorTime"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.AVERAGE]
+                    )
+
+                    avg_cpu = None
+                    for metric in response.metrics:
+                        values = [dp.average for ts in metric.timeseries for dp in ts.data if dp.average is not None]
+                        if values:
+                            avg_cpu = sum(values) / len(values)
+
+                    if avg_cpu is None or avg_cpu >= max_cpu:
+                        continue
+                except Exception:
+                    continue
+
+                sku_name = cache.sku.name if cache.sku else 'Standard'
+                sku_family = cache.sku.family if cache.sku else 'C'
+                capacity = cache.sku.capacity if cache.sku else 0
+                current_cost = self._calculate_redis_cache_cost(sku_name, sku_family, capacity)
+                rec = self._get_redis_recommended_downsize(sku_name, sku_family, capacity)
+                rec_cost = self._calculate_redis_cache_cost(rec['sku_name'], rec['family'], rec['capacity']) if rec else current_cost * 0.5
+                savings = current_cost - rec_cost
+
+                metadata = {
+                    'cache_name': cache.name,
+                    'cache_id': cache.id,
+                    'sku': f"{sku_name} {sku_family}{capacity}",
+                    'avg_cpu_percent': round(avg_cpu, 1),
+                    'max_cpu_threshold': max_cpu,
+                    'observation_days': observation_days,
+                    'recommended_sku': f"{rec['sku_name']} {rec['family']}{rec['capacity']}" if rec else 'smaller tier',
+                    'estimated_savings': round(savings, 2),
+                    'orphan_reason': f"Redis '{cache.name}' low CPU: {avg_cpu:.1f}% avg over {observation_days} days",
+                    'recommendation': f'Downsize to save ~${savings:.0f}/month',
+                    'confidence_level': 'high' if avg_cpu < 5 else 'medium',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='redis_low_cpu_utilization',
+                    resource_id=cache.id,
+                    resource_name=cache.name,
+                    region=region,
+                    estimated_monthly_cost=current_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning low CPU Redis in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_redis_low_cache_hit_ratio(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Redis with low cache hit ratio (<50%).
+        SCENARIO 12: redis_low_cache_hit_ratio - Cache not effective.
+
+        Detection Logic:
+        - Azure Monitor: cachehits / (cachehits + cachemisses) < min_hit_ratio (default 50%)
+        - Observation: min_observation_days (default 14)
+
+        Cost Impact: Cache not serving its purpose - review caching strategy
+        """
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.redis import RedisManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans: list[OrphanResourceData] = []
+        min_hit_ratio = detection_rules.get("min_cache_hit_ratio_percent", 50) if detection_rules else 50
+        observation_days = detection_rules.get("min_observation_days", 14) if detection_rules else 14
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            redis_client = RedisManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+
+            for cache in redis_client.redis.list():
+                if cache.location != region:
+                    continue
+                if not self._is_resource_in_scope(cache.id):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        cache.id,
+                        metric_names=["cachehits", "cachemisses"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.TOTAL]
+                    )
+
+                    total_hits = 0
+                    total_misses = 0
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.total is not None:
+                                    if 'hit' in metric.name.lower():
+                                        total_hits += dp.total
+                                    elif 'miss' in metric.name.lower():
+                                        total_misses += dp.total
+
+                    total_ops = total_hits + total_misses
+                    if total_ops < 100:
+                        continue  # Not enough data
+
+                    hit_ratio = (total_hits / total_ops) * 100
+                    if hit_ratio >= min_hit_ratio:
+                        continue
+                except Exception:
+                    continue
+
+                sku_name = cache.sku.name if cache.sku else 'Standard'
+                sku_family = cache.sku.family if cache.sku else 'C'
+                capacity = cache.sku.capacity if cache.sku else 0
+                monthly_cost = self._calculate_redis_cache_cost(sku_name, sku_family, capacity)
+
+                metadata = {
+                    'cache_name': cache.name,
+                    'cache_id': cache.id,
+                    'sku': f"{sku_name} {sku_family}{capacity}",
+                    'cache_hit_ratio_percent': round(hit_ratio, 1),
+                    'total_hits': int(total_hits),
+                    'total_misses': int(total_misses),
+                    'observation_days': observation_days,
+                    'orphan_reason': f"Redis '{cache.name}' low cache hit ratio: {hit_ratio:.1f}% (threshold: {min_hit_ratio}%)",
+                    'recommendation': 'Review caching strategy - cache is mostly missing, consider TTL tuning or key pattern optimization',
+                    'confidence_level': 'high' if hit_ratio < 20 else 'medium',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='redis_low_cache_hit_ratio',
+                    resource_id=cache.id,
+                    resource_name=cache.name,
+                    region=region,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning low hit ratio Redis in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_redis_low_operations_per_second(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Redis with very low operations per second (<10 ops/sec avg).
+        SCENARIO 13: redis_low_operations_per_second - Underutilized cache.
+
+        Detection Logic:
+        - Azure Monitor: operationsPerSecond < max_ops (default 10)
+        - Observation: min_observation_days (default 30)
+
+        Cost Impact: Over-provisioned for workload
+        """
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.redis import RedisManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans: list[OrphanResourceData] = []
+        max_ops = detection_rules.get("max_ops_per_second", 10) if detection_rules else 10
+        observation_days = detection_rules.get("min_observation_days", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            redis_client = RedisManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+
+            for cache in redis_client.redis.list():
+                if cache.location != region:
+                    continue
+                if not self._is_resource_in_scope(cache.id):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        cache.id,
+                        metric_names=["operationsPerSecond"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.AVERAGE]
+                    )
+
+                    avg_ops = None
+                    for metric in response.metrics:
+                        values = [dp.average for ts in metric.timeseries for dp in ts.data if dp.average is not None]
+                        if values:
+                            avg_ops = sum(values) / len(values)
+
+                    if avg_ops is None or avg_ops >= max_ops:
+                        continue
+                except Exception:
+                    continue
+
+                sku_name = cache.sku.name if cache.sku else 'Standard'
+                sku_family = cache.sku.family if cache.sku else 'C'
+                capacity = cache.sku.capacity if cache.sku else 0
+                current_cost = self._calculate_redis_cache_cost(sku_name, sku_family, capacity)
+                rec = self._get_redis_recommended_downsize(sku_name, sku_family, capacity)
+                rec_cost = self._calculate_redis_cache_cost(rec['sku_name'], rec['family'], rec['capacity']) if rec else current_cost * 0.5
+                savings = current_cost - rec_cost
+
+                metadata = {
+                    'cache_name': cache.name,
+                    'cache_id': cache.id,
+                    'sku': f"{sku_name} {sku_family}{capacity}",
+                    'avg_ops_per_second': round(avg_ops, 1),
+                    'max_ops_threshold': max_ops,
+                    'observation_days': observation_days,
+                    'estimated_savings': round(savings, 2),
+                    'orphan_reason': f"Redis '{cache.name}' low ops: {avg_ops:.1f} ops/sec avg over {observation_days} days",
+                    'recommendation': f'Downsize tier to save ~${savings:.0f}/month - very low operation rate',
+                    'confidence_level': 'high' if avg_ops < 1 else 'medium',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='redis_low_operations_per_second',
+                    resource_id=cache.id,
+                    resource_name=cache.name,
+                    region=region,
+                    estimated_monthly_cost=current_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning low ops Redis in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_redis_high_eviction_rate(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Redis with high eviction rate (cache too small).
+        SCENARIO 14: redis_high_eviction_rate - Upgrade needed.
+
+        Detection Logic:
+        - Azure Monitor: evictedkeys > max_evictions_per_day (default 1000)
+        - High evictions = cache too small, thrashing
+
+        Cost Impact: Performance degradation, need larger tier
+        """
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.redis import RedisManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans: list[OrphanResourceData] = []
+        max_evictions = detection_rules.get("max_evictions_per_day", 1000) if detection_rules else 1000
+        observation_days = detection_rules.get("min_observation_days", 7) if detection_rules else 7
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            redis_client = RedisManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+
+            for cache in redis_client.redis.list():
+                if cache.location != region:
+                    continue
+                if not self._is_resource_in_scope(cache.id):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        cache.id,
+                        metric_names=["evictedkeys"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.TOTAL]
+                    )
+
+                    total_evictions = 0
+                    data_days = 0
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.total is not None:
+                                    total_evictions += dp.total
+                                    data_days += 1
+
+                    avg_evictions_per_day = total_evictions / max(data_days, 1)
+                    if avg_evictions_per_day < max_evictions:
+                        continue
+                except Exception:
+                    continue
+
+                sku_name = cache.sku.name if cache.sku else 'Standard'
+                sku_family = cache.sku.family if cache.sku else 'C'
+                capacity = cache.sku.capacity if cache.sku else 0
+                monthly_cost = self._calculate_redis_cache_cost(sku_name, sku_family, capacity)
+
+                metadata = {
+                    'cache_name': cache.name,
+                    'cache_id': cache.id,
+                    'sku': f"{sku_name} {sku_family}{capacity}",
+                    'avg_evictions_per_day': round(avg_evictions_per_day, 0),
+                    'total_evictions': int(total_evictions),
+                    'observation_days': observation_days,
+                    'orphan_reason': f"Redis '{cache.name}' high evictions: {avg_evictions_per_day:.0f}/day - cache too small",
+                    'recommendation': 'Upgrade to larger tier or optimize key TTLs to reduce evictions',
+                    'confidence_level': 'high' if avg_evictions_per_day > 10000 else 'medium',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='redis_high_eviction_rate',
+                    resource_id=cache.id,
+                    resource_name=cache.name,
+                    region=region,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning high eviction Redis in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_redis_high_memory_fragmentation(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Redis with high memory fragmentation ratio.
+        SCENARIO 15: redis_high_memory_fragmentation - Restart or resize needed.
+
+        Detection Logic:
+        - Azure Monitor: usedmemoryRss / usedmemory > max_fragmentation (default 1.5)
+        - High fragmentation = wasted memory, performance impact
+
+        Cost Impact: Paying for wasted memory within tier
+        """
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.redis import RedisManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans: list[OrphanResourceData] = []
+        max_frag_ratio = detection_rules.get("max_fragmentation_ratio", 1.5) if detection_rules else 1.5
+        observation_days = detection_rules.get("min_observation_days", 7) if detection_rules else 7
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            redis_client = RedisManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+
+            for cache in redis_client.redis.list():
+                if cache.location != region:
+                    continue
+                if not self._is_resource_in_scope(cache.id):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        cache.id,
+                        metric_names=["usedmemoryRss", "usedmemory"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.AVERAGE]
+                    )
+
+                    avg_rss = None
+                    avg_used = None
+                    for metric in response.metrics:
+                        values = [dp.average for ts in metric.timeseries for dp in ts.data if dp.average is not None]
+                        if values:
+                            avg_val = sum(values) / len(values)
+                            if 'rss' in metric.name.lower():
+                                avg_rss = avg_val
+                            else:
+                                avg_used = avg_val
+
+                    if avg_rss is None or avg_used is None or avg_used == 0:
+                        continue
+
+                    frag_ratio = avg_rss / avg_used
+                    if frag_ratio < max_frag_ratio:
+                        continue
+                except Exception:
+                    continue
+
+                sku_name = cache.sku.name if cache.sku else 'Standard'
+                sku_family = cache.sku.family if cache.sku else 'C'
+                capacity = cache.sku.capacity if cache.sku else 0
+                monthly_cost = self._calculate_redis_cache_cost(sku_name, sku_family, capacity)
+
+                metadata = {
+                    'cache_name': cache.name,
+                    'cache_id': cache.id,
+                    'sku': f"{sku_name} {sku_family}{capacity}",
+                    'memory_fragmentation_ratio': round(frag_ratio, 2),
+                    'avg_rss_bytes': round(avg_rss, 0) if avg_rss else 0,
+                    'avg_used_bytes': round(avg_used, 0) if avg_used else 0,
+                    'observation_days': observation_days,
+                    'orphan_reason': f"Redis '{cache.name}' high memory fragmentation: {frag_ratio:.2f}x (threshold: {max_frag_ratio}x)",
+                    'recommendation': 'Restart cache or schedule maintenance to defragment memory',
+                    'confidence_level': 'high' if frag_ratio > 2.0 else 'medium',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='redis_high_memory_fragmentation',
+                    resource_id=cache.id,
+                    resource_name=cache.name,
+                    region=region,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning fragmented Redis in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_redis_low_network_bandwidth(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Redis with near-zero network bandwidth (<1 KB/sec avg).
+        SCENARIO 16: redis_low_network_bandwidth - Cache idle.
+
+        Detection Logic:
+        - Azure Monitor: cacheRead + cacheWrite < max_bytes_per_sec (default 1024)
+        - Observation: min_observation_days (default 30)
+
+        Cost Impact: Cache not being used
+        """
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.redis import RedisManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans: list[OrphanResourceData] = []
+        max_bytes_per_sec = detection_rules.get("max_network_bytes_per_sec", 1024) if detection_rules else 1024
+        observation_days = detection_rules.get("min_observation_days", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            redis_client = RedisManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+
+            for cache in redis_client.redis.list():
+                if cache.location != region:
+                    continue
+                if not self._is_resource_in_scope(cache.id):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        cache.id,
+                        metric_names=["cacheRead", "cacheWrite"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.AVERAGE]
+                    )
+
+                    avg_read = 0.0
+                    avg_write = 0.0
+                    for metric in response.metrics:
+                        values = [dp.average for ts in metric.timeseries for dp in ts.data if dp.average is not None]
+                        if values:
+                            avg_val = sum(values) / len(values)
+                            if 'read' in metric.name.lower():
+                                avg_read = avg_val
+                            elif 'write' in metric.name.lower():
+                                avg_write = avg_val
+
+                    total_bandwidth = avg_read + avg_write
+                    if total_bandwidth >= max_bytes_per_sec:
+                        continue
+                except Exception:
+                    continue
+
+                sku_name = cache.sku.name if cache.sku else 'Standard'
+                sku_family = cache.sku.family if cache.sku else 'C'
+                capacity = cache.sku.capacity if cache.sku else 0
+                monthly_cost = self._calculate_redis_cache_cost(sku_name, sku_family, capacity)
+
+                metadata = {
+                    'cache_name': cache.name,
+                    'cache_id': cache.id,
+                    'sku': f"{sku_name} {sku_family}{capacity}",
+                    'avg_read_bytes_per_sec': round(avg_read, 1),
+                    'avg_write_bytes_per_sec': round(avg_write, 1),
+                    'total_bandwidth_bytes_per_sec': round(total_bandwidth, 1),
+                    'observation_days': observation_days,
+                    'orphan_reason': f"Redis '{cache.name}' near-zero network: {total_bandwidth:.0f} bytes/sec avg",
+                    'recommendation': 'Delete idle cache or downsize - near-zero network activity',
+                    'confidence_level': 'critical' if total_bandwidth < 10 else 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='redis_low_network_bandwidth',
+                    resource_id=cache.id,
+                    resource_name=cache.name,
+                    region=region,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning low network Redis in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_redis_high_server_load(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Redis with consistently high server load (>90%).
+        SCENARIO 17: redis_high_server_load - Upgrade needed.
+
+        Detection Logic:
+        - Azure Monitor: serverLoad > min_server_load (default 90%)
+        - Observation: min_observation_days (default 7)
+
+        Cost Impact: Performance degradation, needs upgrade
+        """
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.redis import RedisManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans: list[OrphanResourceData] = []
+        min_server_load = detection_rules.get("min_server_load_percent", 90) if detection_rules else 90
+        observation_days = detection_rules.get("min_observation_days", 7) if detection_rules else 7
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            redis_client = RedisManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+
+            for cache in redis_client.redis.list():
+                if cache.location != region:
+                    continue
+                if not self._is_resource_in_scope(cache.id):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        cache.id,
+                        metric_names=["serverLoad"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.AVERAGE]
+                    )
+
+                    avg_load = None
+                    for metric in response.metrics:
+                        values = [dp.average for ts in metric.timeseries for dp in ts.data if dp.average is not None]
+                        if values:
+                            avg_load = sum(values) / len(values)
+
+                    if avg_load is None or avg_load < min_server_load:
+                        continue
+                except Exception:
+                    continue
+
+                sku_name = cache.sku.name if cache.sku else 'Standard'
+                sku_family = cache.sku.family if cache.sku else 'C'
+                capacity = cache.sku.capacity if cache.sku else 0
+                monthly_cost = self._calculate_redis_cache_cost(sku_name, sku_family, capacity)
+                # Upgrading costs more but prevents performance issues
+                next_capacity = min(capacity + 1, 6)
+                upgrade_cost = self._calculate_redis_cache_cost(sku_name, sku_family, next_capacity) - monthly_cost
+
+                metadata = {
+                    'cache_name': cache.name,
+                    'cache_id': cache.id,
+                    'sku': f"{sku_name} {sku_family}{capacity}",
+                    'avg_server_load_percent': round(avg_load, 1),
+                    'min_load_threshold': min_server_load,
+                    'observation_days': observation_days,
+                    'recommended_upgrade': f'{sku_name} {sku_family}{next_capacity}',
+                    'upgrade_cost': round(upgrade_cost, 2),
+                    'orphan_reason': f"Redis '{cache.name}' high server load: {avg_load:.1f}% avg - performance degradation",
+                    'recommendation': f'Upgrade to {sku_name} {sku_family}{next_capacity} to reduce load (+${upgrade_cost:.0f}/month)',
+                    'confidence_level': 'critical' if avg_load > 95 else 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='redis_high_server_load',
+                    resource_id=cache.id,
+                    resource_name=cache.name,
+                    region=region,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning high server load Redis in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_redis_no_minimum_tls(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Redis without minimum TLS version enforced.
+        SCENARIO 18: redis_no_minimum_tls - Security risk.
+
+        Detection Logic:
+        - minimum_tls_version not set or < 1.2
+        - Allows older insecure TLS versions
+
+        Cost Impact: Security/compliance risk
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.redis import RedisManagementClient
+
+        orphans: list[OrphanResourceData] = []
+        min_tls = detection_rules.get("min_tls_version", "1.2") if detection_rules else "1.2"
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            redis_client = RedisManagementClient(credential, self.subscription_id)
+
+            for cache in redis_client.redis.list():
+                if cache.location != region:
+                    continue
+                if not self._is_resource_in_scope(cache.id):
+                    continue
+
+                tls_version = cache.minimum_tls_version or ''
+                # Empty or < 1.2 is a security risk
+                if tls_version and tls_version >= min_tls:
+                    continue
+
+                sku_name = cache.sku.name if cache.sku else 'Standard'
+                sku_family = cache.sku.family if cache.sku else 'C'
+                capacity = cache.sku.capacity if cache.sku else 0
+                monthly_cost = self._calculate_redis_cache_cost(sku_name, sku_family, capacity)
+
+                metadata = {
+                    'cache_name': cache.name,
+                    'cache_id': cache.id,
+                    'sku': f"{sku_name} {sku_family}{capacity}",
+                    'current_tls_version': tls_version or 'not set',
+                    'required_tls_version': min_tls,
+                    'orphan_reason': f"Redis '{cache.name}' TLS version '{tls_version or 'not set'}' below minimum {min_tls}",
+                    'recommendation': f'Set minimum TLS version to {min_tls} to enforce secure connections',
+                    'confidence_level': 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='redis_no_minimum_tls',
+                    resource_id=cache.id,
+                    resource_name=cache.name,
+                    region=region,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning Redis TLS versions in {region}: {str(e)}")
 
         return orphans
 
