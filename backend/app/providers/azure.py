@@ -1230,6 +1230,61 @@ class AzureProvider(CloudProviderBase):
         redis_no_tls = await self.scan_redis_no_minimum_tls(region, rules.get("redis_no_minimum_tls"))
         results.extend(redis_no_tls)
 
+        # ===== Azure Event Hubs Waste Detection (18 scenarios) =====
+        eh_idle_ns = await self.scan_eventhub_namespace_idle(region, rules.get("eventhub_namespace_idle"))
+        results.extend(eh_idle_ns)
+
+        eh_premium_dev = await self.scan_eventhub_premium_in_dev(region, rules.get("eventhub_premium_in_dev"))
+        results.extend(eh_premium_dev)
+
+        eh_no_cg = await self.scan_eventhub_no_consumer_groups(region, rules.get("eventhub_no_consumer_groups"))
+        results.extend(eh_no_cg)
+
+        eh_empty_ns = await self.scan_eventhub_empty_namespace(region, rules.get("eventhub_empty_namespace"))
+        results.extend(eh_empty_ns)
+
+        eh_excess_tu = await self.scan_eventhub_excessive_throughput_units(region, rules.get("eventhub_excessive_throughput_units"))
+        results.extend(eh_excess_tu)
+
+        eh_no_inflate = await self.scan_eventhub_auto_inflate_disabled(region, rules.get("eventhub_auto_inflate_disabled"))
+        results.extend(eh_no_inflate)
+
+        eh_no_capture = await self.scan_eventhub_no_capture_configured(region, rules.get("eventhub_no_capture_configured"))
+        results.extend(eh_no_capture)
+
+        eh_retention = await self.scan_eventhub_excessive_retention(region, rules.get("eventhub_excessive_retention"))
+        results.extend(eh_retention)
+
+        eh_no_private = await self.scan_eventhub_no_private_endpoint(region, rules.get("eventhub_no_private_endpoint"))
+        results.extend(eh_no_private)
+
+        eh_multi_ns = await self.scan_eventhub_multiple_namespaces_same_rg(region, rules.get("eventhub_multiple_namespaces_same_rg"))
+        results.extend(eh_multi_ns)
+
+        eh_low_incoming = await self.scan_eventhub_low_incoming_messages(region, rules.get("eventhub_low_incoming_messages"))
+        results.extend(eh_low_incoming)
+
+        eh_low_outgoing = await self.scan_eventhub_low_outgoing_messages(region, rules.get("eventhub_low_outgoing_messages"))
+        results.extend(eh_low_outgoing)
+
+        eh_low_tu = await self.scan_eventhub_low_throughput_utilization(region, rules.get("eventhub_low_throughput_utilization"))
+        results.extend(eh_low_tu)
+
+        eh_throttled = await self.scan_eventhub_high_throttled_requests(region, rules.get("eventhub_high_throttled_requests"))
+        results.extend(eh_throttled)
+
+        eh_zero_conn = await self.scan_eventhub_zero_active_connections(region, rules.get("eventhub_zero_active_connections"))
+        results.extend(eh_zero_conn)
+
+        eh_capture_unused = await self.scan_eventhub_low_capture_utilization(region, rules.get("eventhub_low_capture_utilization"))
+        results.extend(eh_capture_unused)
+
+        eh_server_err = await self.scan_eventhub_high_server_errors(region, rules.get("eventhub_high_server_errors"))
+        results.extend(eh_server_err)
+
+        eh_low_bytes = await self.scan_eventhub_low_incoming_bytes(region, rules.get("eventhub_low_incoming_bytes"))
+        results.extend(eh_low_bytes)
+
         # ===== Azure AKS Clusters Waste Detection (10 Scenarios) - BONUS =====
         aks_clusters = await self.scan_idle_eks_clusters(region, rules.get("azure_aks_cluster"))
         results.extend(aks_clusters)
@@ -11818,6 +11873,1529 @@ class AzureProvider(CloudProviderBase):
                 ))
         except Exception as e:
             print(f"Error scanning Redis TLS versions in {region}: {str(e)}")
+
+        return orphans
+
+    # ===== Azure Event Hubs Helpers =====
+
+    def _calculate_eventhub_namespace_cost(self, sku_name: str, capacity: int = 1) -> float:
+        """
+        Calculate monthly cost for Event Hubs namespace.
+
+        Pricing (US East):
+        - Basic: $11.16/TU/month
+        - Standard: $22.34/TU/month
+        - Premium: $1,094/PU/month
+        - Dedicated: $6,849/CU/month
+        """
+        costs = {
+            'BASIC': 11.16,
+            'STANDARD': 22.34,
+            'PREMIUM': 1094.0,
+            'DEDICATED': 6849.0,
+        }
+        unit_cost = costs.get(sku_name.upper(), 22.34)
+        return unit_cost * max(capacity, 1)
+
+    def _is_eventhub_premium_tier(self, sku_name: str) -> bool:
+        """Check if Event Hubs namespace is Premium or Dedicated."""
+        return sku_name.upper() in ('PREMIUM', 'DEDICATED')
+
+    # ===== Azure Event Hubs Scanners (18 scenarios) =====
+
+    async def scan_eventhub_namespace_idle(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Event Hubs namespaces with 0 incoming messages for 30+ days.
+        SCENARIO 1: eventhub_namespace_idle - 100% waste.
+
+        Detection Logic:
+        - Azure Monitor: IncomingMessages = 0 for observation period
+        - Namespace is active but receives no events
+
+        Cost Impact: $22-1094/month depending on tier (100% waste)
+        """
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.eventhub import EventHubManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans: list[OrphanResourceData] = []
+        observation_days = detection_rules.get("min_observation_days", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            eh_client = EventHubManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+
+            for ns in eh_client.namespaces.list():
+                ns_location = ns.location.lower().replace(" ", "") if ns.location else ""
+                target_region = region.lower().replace(" ", "")
+                if ns_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(ns.id):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        ns.id,
+                        metric_names=["IncomingMessages"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.TOTAL]
+                    )
+
+                    total_messages = 0
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.total is not None:
+                                    total_messages += dp.total
+
+                    if total_messages > 0:
+                        continue
+                except Exception:
+                    continue
+
+                sku_name = ns.sku.name if ns.sku else 'Standard'
+                capacity = ns.sku.capacity if ns.sku and ns.sku.capacity else 1
+                monthly_cost = self._calculate_eventhub_namespace_cost(sku_name, capacity)
+
+                metadata = {
+                    'namespace_name': ns.name,
+                    'namespace_id': ns.id,
+                    'sku': f"{sku_name} (x{capacity})",
+                    'total_incoming_messages': 0,
+                    'observation_days': observation_days,
+                    'orphan_reason': f"Event Hubs namespace '{ns.name}' has 0 incoming messages for {observation_days} days",
+                    'recommendation': 'Delete idle namespace to eliminate 100% waste',
+                    'confidence_level': 'critical',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='eventhub_namespace_idle',
+                    resource_id=ns.id,
+                    resource_name=ns.name,
+                    region=ns.location,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning idle Event Hubs namespaces in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_eventhub_premium_in_dev(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Premium/Standard Event Hubs in dev/test environments.
+        SCENARIO 2: eventhub_premium_in_dev - Downgrade to save 80%+.
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.eventhub import EventHubManagementClient
+
+        orphans: list[OrphanResourceData] = []
+        dev_keywords = ['dev', 'test', 'staging', 'sandbox', 'poc', 'demo', 'lab', 'trial', 'qa']
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            eh_client = EventHubManagementClient(credential, self.subscription_id)
+
+            for ns in eh_client.namespaces.list():
+                ns_location = ns.location.lower().replace(" ", "") if ns.location else ""
+                target_region = region.lower().replace(" ", "")
+                if ns_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(ns.id):
+                    continue
+
+                sku_name = ns.sku.name if ns.sku else 'Basic'
+                if sku_name.upper() == 'BASIC':
+                    continue
+
+                ns_lower = ns.name.lower()
+                rg_name = ns.id.split('/')[4].lower() if ns.id and len(ns.id.split('/')) > 4 else ''
+                tags = ns.tags or {}
+                tag_values = ' '.join(str(v).lower() for v in tags.values())
+
+                is_dev = any(kw in name for kw in dev_keywords for name in (ns_lower, rg_name, tag_values))
+                if not is_dev:
+                    continue
+
+                capacity = ns.sku.capacity if ns.sku and ns.sku.capacity else 1
+                current_cost = self._calculate_eventhub_namespace_cost(sku_name, capacity)
+                basic_cost = self._calculate_eventhub_namespace_cost('Basic', 1)
+                savings = current_cost - basic_cost
+
+                metadata = {
+                    'namespace_name': ns.name,
+                    'namespace_id': ns.id,
+                    'sku': f"{sku_name} (x{capacity})",
+                    'resource_group': rg_name,
+                    'is_dev_environment': True,
+                    'recommended_sku': 'Basic',
+                    'estimated_savings': round(savings, 2),
+                    'orphan_reason': f"Event Hubs '{ns.name}' ({sku_name}) in dev/test environment",
+                    'recommendation': f'Downgrade to Basic to save ~${savings:.0f}/month in non-production',
+                    'confidence_level': 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='eventhub_premium_in_dev',
+                    resource_id=ns.id,
+                    resource_name=ns.name,
+                    region=ns.location,
+                    estimated_monthly_cost=current_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning premium Event Hubs in dev in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_eventhub_no_consumer_groups(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Event Hubs with only $Default consumer group (no consumers).
+        SCENARIO 3: eventhub_no_consumer_groups - No one is reading events.
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.eventhub import EventHubManagementClient
+
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            eh_client = EventHubManagementClient(credential, self.subscription_id)
+
+            for ns in eh_client.namespaces.list():
+                ns_location = ns.location.lower().replace(" ", "") if ns.location else ""
+                target_region = region.lower().replace(" ", "")
+                if ns_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(ns.id):
+                    continue
+
+                rg_name = ns.id.split('/')[4] if ns.id and len(ns.id.split('/')) > 4 else ''
+                if not rg_name:
+                    continue
+
+                sku_name = ns.sku.name if ns.sku else 'Standard'
+                capacity = ns.sku.capacity if ns.sku and ns.sku.capacity else 1
+
+                try:
+                    event_hubs = list(eh_client.event_hubs.list_by_namespace(rg_name, ns.name))
+                except Exception:
+                    continue
+
+                for eh in event_hubs:
+                    try:
+                        cgs = list(eh_client.consumer_groups.list_by_event_hub(rg_name, ns.name, eh.name))
+                        # Only $Default consumer group = no real consumers
+                        if len(cgs) > 1:
+                            continue
+                    except Exception:
+                        continue
+
+                    monthly_cost = self._calculate_eventhub_namespace_cost(sku_name, capacity) / max(len(event_hubs), 1)
+
+                    metadata = {
+                        'namespace_name': ns.name,
+                        'eventhub_name': eh.name,
+                        'eventhub_id': eh.id,
+                        'consumer_groups': ['$Default'],
+                        'sku': f"{sku_name} (x{capacity})",
+                        'orphan_reason': f"Event Hub '{eh.name}' has only $Default consumer group - no active consumers",
+                        'recommendation': 'Review if Event Hub is needed - no consumers are reading events',
+                        'confidence_level': 'high',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='eventhub_no_consumer_groups',
+                        resource_id=eh.id,
+                        resource_name=f"{ns.name}/{eh.name}",
+                        region=ns.location,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata=metadata
+                    ))
+        except Exception as e:
+            print(f"Error scanning Event Hubs consumer groups in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_eventhub_empty_namespace(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Event Hubs namespaces with 0 event hubs.
+        SCENARIO 4: eventhub_empty_namespace - 100% waste.
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.eventhub import EventHubManagementClient
+
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            eh_client = EventHubManagementClient(credential, self.subscription_id)
+
+            for ns in eh_client.namespaces.list():
+                ns_location = ns.location.lower().replace(" ", "") if ns.location else ""
+                target_region = region.lower().replace(" ", "")
+                if ns_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(ns.id):
+                    continue
+
+                rg_name = ns.id.split('/')[4] if ns.id and len(ns.id.split('/')) > 4 else ''
+                if not rg_name:
+                    continue
+
+                try:
+                    event_hubs = list(eh_client.event_hubs.list_by_namespace(rg_name, ns.name))
+                    if len(event_hubs) > 0:
+                        continue
+                except Exception:
+                    continue
+
+                sku_name = ns.sku.name if ns.sku else 'Standard'
+                capacity = ns.sku.capacity if ns.sku and ns.sku.capacity else 1
+                monthly_cost = self._calculate_eventhub_namespace_cost(sku_name, capacity)
+
+                metadata = {
+                    'namespace_name': ns.name,
+                    'namespace_id': ns.id,
+                    'sku': f"{sku_name} (x{capacity})",
+                    'event_hub_count': 0,
+                    'orphan_reason': f"Event Hubs namespace '{ns.name}' has 0 event hubs - 100% waste",
+                    'recommendation': 'Delete empty namespace to eliminate cost',
+                    'confidence_level': 'critical',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='eventhub_empty_namespace',
+                    resource_id=ns.id,
+                    resource_name=ns.name,
+                    region=ns.location,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning empty Event Hubs namespaces in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_eventhub_excessive_throughput_units(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for namespaces with excessive throughput units relative to traffic.
+        SCENARIO 5: eventhub_excessive_throughput_units - Over-provisioned TUs.
+        """
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.eventhub import EventHubManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans: list[OrphanResourceData] = []
+        max_tu_utilization = detection_rules.get("max_tu_utilization_percent", 20) if detection_rules else 20
+        observation_days = detection_rules.get("min_observation_days", 14) if detection_rules else 14
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            eh_client = EventHubManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+
+            for ns in eh_client.namespaces.list():
+                ns_location = ns.location.lower().replace(" ", "") if ns.location else ""
+                target_region = region.lower().replace(" ", "")
+                if ns_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(ns.id):
+                    continue
+
+                sku_name = ns.sku.name if ns.sku else 'Standard'
+                if sku_name.upper() in ('PREMIUM', 'DEDICATED'):
+                    continue  # Premium uses PUs, not TUs
+
+                capacity = ns.sku.capacity if ns.sku and ns.sku.capacity else 1
+                if capacity <= 1:
+                    continue
+
+                # 1 TU = 1 MB/s ingress, 2 MB/s egress
+                max_bytes_per_sec = capacity * 1024 * 1024
+
+                try:
+                    response = metrics_client.query_resource(
+                        ns.id,
+                        metric_names=["IncomingBytes"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.AVERAGE]
+                    )
+
+                    avg_bytes = None
+                    for metric in response.metrics:
+                        values = [dp.average for ts in metric.timeseries for dp in ts.data if dp.average is not None]
+                        if values:
+                            avg_bytes = sum(values) / len(values)
+
+                    if avg_bytes is None:
+                        continue
+
+                    utilization = (avg_bytes / max_bytes_per_sec) * 100 if max_bytes_per_sec > 0 else 0
+                    if utilization >= max_tu_utilization:
+                        continue
+                except Exception:
+                    continue
+
+                current_cost = self._calculate_eventhub_namespace_cost(sku_name, capacity)
+                recommended_tus = max(1, int(capacity * (utilization / 100) * 2) + 1)
+                recommended_cost = self._calculate_eventhub_namespace_cost(sku_name, recommended_tus)
+                savings = current_cost - recommended_cost
+
+                metadata = {
+                    'namespace_name': ns.name,
+                    'namespace_id': ns.id,
+                    'sku': f"{sku_name} (x{capacity} TUs)",
+                    'tu_utilization_percent': round(utilization, 1),
+                    'recommended_tus': recommended_tus,
+                    'estimated_savings': round(savings, 2),
+                    'orphan_reason': f"Event Hubs '{ns.name}' has {capacity} TUs but only {utilization:.1f}% utilized",
+                    'recommendation': f'Reduce to {recommended_tus} TUs to save ~${savings:.0f}/month',
+                    'confidence_level': 'high' if utilization < 5 else 'medium',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='eventhub_excessive_throughput_units',
+                    resource_id=ns.id,
+                    resource_name=ns.name,
+                    region=ns.location,
+                    estimated_monthly_cost=current_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning excessive TU Event Hubs in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_eventhub_auto_inflate_disabled(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for namespaces without auto-inflate and fixed TUs >= 2.
+        SCENARIO 6: eventhub_auto_inflate_disabled - Waste during low-load.
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.eventhub import EventHubManagementClient
+
+        orphans: list[OrphanResourceData] = []
+        min_tus = detection_rules.get("min_tus_for_auto_inflate", 2) if detection_rules else 2
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            eh_client = EventHubManagementClient(credential, self.subscription_id)
+
+            for ns in eh_client.namespaces.list():
+                ns_location = ns.location.lower().replace(" ", "") if ns.location else ""
+                target_region = region.lower().replace(" ", "")
+                if ns_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(ns.id):
+                    continue
+
+                sku_name = ns.sku.name if ns.sku else 'Standard'
+                if sku_name.upper() != 'STANDARD':
+                    continue  # Auto-inflate only for Standard
+
+                capacity = ns.sku.capacity if ns.sku and ns.sku.capacity else 1
+                if capacity < min_tus:
+                    continue
+
+                is_auto_inflate = getattr(ns, 'is_auto_inflate_enabled', False)
+                if is_auto_inflate:
+                    continue
+
+                monthly_cost = self._calculate_eventhub_namespace_cost(sku_name, capacity)
+                savings = round(monthly_cost * 0.40, 2)
+
+                metadata = {
+                    'namespace_name': ns.name,
+                    'namespace_id': ns.id,
+                    'sku': f"{sku_name} (x{capacity} TUs)",
+                    'is_auto_inflate_enabled': False,
+                    'current_tus': capacity,
+                    'estimated_savings': savings,
+                    'orphan_reason': f"Event Hubs '{ns.name}' has {capacity} fixed TUs without auto-inflate",
+                    'recommendation': 'Enable auto-inflate to scale down during off-peak and save costs',
+                    'confidence_level': 'medium',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='eventhub_auto_inflate_disabled',
+                    resource_id=ns.id,
+                    resource_name=ns.name,
+                    region=ns.location,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning auto-inflate disabled Event Hubs in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_eventhub_no_capture_configured(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Standard+ Event Hubs without Capture (data archival).
+        SCENARIO 7: eventhub_no_capture_configured - Missing data archival.
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.eventhub import EventHubManagementClient
+
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            eh_client = EventHubManagementClient(credential, self.subscription_id)
+
+            for ns in eh_client.namespaces.list():
+                ns_location = ns.location.lower().replace(" ", "") if ns.location else ""
+                target_region = region.lower().replace(" ", "")
+                if ns_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(ns.id):
+                    continue
+
+                sku_name = ns.sku.name if ns.sku else 'Basic'
+                if sku_name.upper() == 'BASIC':
+                    continue  # Capture not available on Basic
+
+                rg_name = ns.id.split('/')[4] if ns.id and len(ns.id.split('/')) > 4 else ''
+                if not rg_name:
+                    continue
+
+                try:
+                    event_hubs = list(eh_client.event_hubs.list_by_namespace(rg_name, ns.name))
+                except Exception:
+                    continue
+
+                for eh in event_hubs:
+                    capture = eh.capture_description
+                    if capture and capture.enabled:
+                        continue
+
+                    capacity = ns.sku.capacity if ns.sku and ns.sku.capacity else 1
+                    monthly_cost = self._calculate_eventhub_namespace_cost(sku_name, capacity) / max(len(event_hubs), 1)
+
+                    metadata = {
+                        'namespace_name': ns.name,
+                        'eventhub_name': eh.name,
+                        'eventhub_id': eh.id,
+                        'sku': f"{sku_name}",
+                        'capture_enabled': False,
+                        'orphan_reason': f"Event Hub '{eh.name}' has no Capture configured - data not archived",
+                        'recommendation': 'Enable Capture to archive events to Blob Storage or Data Lake',
+                        'confidence_level': 'medium',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='eventhub_no_capture_configured',
+                        resource_id=eh.id,
+                        resource_name=f"{ns.name}/{eh.name}",
+                        region=ns.location,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata=metadata
+                    ))
+        except Exception as e:
+            print(f"Error scanning Event Hubs without capture in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_eventhub_excessive_retention(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Event Hubs with excessive message retention.
+        SCENARIO 8: eventhub_excessive_retention - Paying for unnecessary storage.
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.eventhub import EventHubManagementClient
+
+        orphans: list[OrphanResourceData] = []
+        max_retention_days = detection_rules.get("max_retention_days", 7) if detection_rules else 7
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            eh_client = EventHubManagementClient(credential, self.subscription_id)
+
+            for ns in eh_client.namespaces.list():
+                ns_location = ns.location.lower().replace(" ", "") if ns.location else ""
+                target_region = region.lower().replace(" ", "")
+                if ns_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(ns.id):
+                    continue
+
+                rg_name = ns.id.split('/')[4] if ns.id and len(ns.id.split('/')) > 4 else ''
+                if not rg_name:
+                    continue
+
+                sku_name = ns.sku.name if ns.sku else 'Standard'
+                capacity = ns.sku.capacity if ns.sku and ns.sku.capacity else 1
+
+                try:
+                    event_hubs = list(eh_client.event_hubs.list_by_namespace(rg_name, ns.name))
+                except Exception:
+                    continue
+
+                for eh in event_hubs:
+                    retention = eh.message_retention_in_days or 1
+                    if retention <= max_retention_days:
+                        continue
+
+                    monthly_cost = self._calculate_eventhub_namespace_cost(sku_name, capacity) / max(len(event_hubs), 1)
+                    # Extra retention adds ~$0.03/GB/day storage cost
+                    extra_days = retention - max_retention_days
+                    storage_overhead = extra_days * 0.90  # Approximate
+
+                    metadata = {
+                        'namespace_name': ns.name,
+                        'eventhub_name': eh.name,
+                        'eventhub_id': eh.id,
+                        'retention_days': retention,
+                        'recommended_retention': max_retention_days,
+                        'extra_days': extra_days,
+                        'orphan_reason': f"Event Hub '{eh.name}' has {retention}-day retention (recommended: {max_retention_days})",
+                        'recommendation': f'Reduce retention to {max_retention_days} days and use Capture for long-term archival',
+                        'confidence_level': 'medium',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='eventhub_excessive_retention',
+                        resource_id=eh.id,
+                        resource_name=f"{ns.name}/{eh.name}",
+                        region=ns.location,
+                        estimated_monthly_cost=storage_overhead,
+                        resource_metadata=metadata
+                    ))
+        except Exception as e:
+            print(f"Error scanning Event Hubs retention in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_eventhub_no_private_endpoint(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Premium Event Hubs without private endpoint.
+        SCENARIO 9: eventhub_no_private_endpoint - Security gap.
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.eventhub import EventHubManagementClient
+
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            eh_client = EventHubManagementClient(credential, self.subscription_id)
+
+            for ns in eh_client.namespaces.list():
+                ns_location = ns.location.lower().replace(" ", "") if ns.location else ""
+                target_region = region.lower().replace(" ", "")
+                if ns_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(ns.id):
+                    continue
+
+                sku_name = ns.sku.name if ns.sku else 'Standard'
+                if not self._is_eventhub_premium_tier(sku_name):
+                    continue
+
+                private_endpoints = getattr(ns, 'private_endpoint_connections', None) or []
+                if private_endpoints:
+                    continue
+
+                capacity = ns.sku.capacity if ns.sku and ns.sku.capacity else 1
+                monthly_cost = self._calculate_eventhub_namespace_cost(sku_name, capacity)
+
+                metadata = {
+                    'namespace_name': ns.name,
+                    'namespace_id': ns.id,
+                    'sku': f"{sku_name} (x{capacity})",
+                    'has_private_endpoint': False,
+                    'orphan_reason': f"Premium Event Hubs '{ns.name}' has no private endpoint - public exposure",
+                    'recommendation': 'Configure private endpoint for Premium namespace',
+                    'confidence_level': 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='eventhub_no_private_endpoint',
+                    resource_id=ns.id,
+                    resource_name=ns.name,
+                    region=ns.location,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning Event Hubs without private endpoint in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_eventhub_multiple_namespaces_same_rg(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for multiple Event Hubs namespaces in same resource group.
+        SCENARIO 10: eventhub_multiple_namespaces_same_rg - Consolidation.
+        """
+        from collections import defaultdict
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.eventhub import EventHubManagementClient
+
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            eh_client = EventHubManagementClient(credential, self.subscription_id)
+
+            rg_namespaces: dict[str, list] = defaultdict(list)
+            for ns in eh_client.namespaces.list():
+                ns_location = ns.location.lower().replace(" ", "") if ns.location else ""
+                target_region = region.lower().replace(" ", "")
+                if ns_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(ns.id):
+                    continue
+                rg_name = ns.id.split('/')[4] if ns.id and len(ns.id.split('/')) > 4 else ''
+                if rg_name:
+                    rg_namespaces[rg_name].append(ns)
+
+            for rg_name, namespaces in rg_namespaces.items():
+                if len(namespaces) < 2:
+                    continue
+
+                sorted_ns = sorted(
+                    namespaces,
+                    key=lambda n: self._calculate_eventhub_namespace_cost(
+                        n.sku.name if n.sku else 'Standard',
+                        n.sku.capacity if n.sku and n.sku.capacity else 1
+                    ),
+                    reverse=True
+                )
+
+                for ns in sorted_ns[1:]:
+                    sku_name = ns.sku.name if ns.sku else 'Standard'
+                    capacity = ns.sku.capacity if ns.sku and ns.sku.capacity else 1
+                    ns_cost = self._calculate_eventhub_namespace_cost(sku_name, capacity)
+
+                    metadata = {
+                        'namespace_name': ns.name,
+                        'namespace_id': ns.id,
+                        'sku': f"{sku_name} (x{capacity})",
+                        'resource_group': rg_name,
+                        'total_namespaces_in_rg': len(namespaces),
+                        'namespace_names': [n.name for n in namespaces],
+                        'orphan_reason': f"RG '{rg_name}' has {len(namespaces)} Event Hubs namespaces - consolidation possible",
+                        'recommendation': f'Consolidate namespaces to save ~${ns_cost:.0f}/month',
+                        'confidence_level': 'medium',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='eventhub_multiple_namespaces_same_rg',
+                        resource_id=ns.id,
+                        resource_name=ns.name,
+                        region=ns.location,
+                        estimated_monthly_cost=ns_cost,
+                        resource_metadata=metadata
+                    ))
+        except Exception as e:
+            print(f"Error scanning multiple Event Hubs namespaces in {region}: {str(e)}")
+
+        return orphans
+
+    # Phase 2 - Event Hubs Metrics-based detection (8 scenarios)
+
+    async def scan_eventhub_low_incoming_messages(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Event Hubs with very low incoming messages.
+        SCENARIO 11: eventhub_low_incoming_messages - Under-utilized.
+        """
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.eventhub import EventHubManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans: list[OrphanResourceData] = []
+        max_messages_per_day = detection_rules.get("max_incoming_messages_per_day", 100) if detection_rules else 100
+        observation_days = detection_rules.get("min_observation_days", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            eh_client = EventHubManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+
+            for ns in eh_client.namespaces.list():
+                ns_location = ns.location.lower().replace(" ", "") if ns.location else ""
+                target_region = region.lower().replace(" ", "")
+                if ns_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(ns.id):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        ns.id,
+                        metric_names=["IncomingMessages"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.TOTAL]
+                    )
+
+                    total_msgs = 0
+                    data_days = 0
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.total is not None:
+                                    total_msgs += dp.total
+                                    data_days += 1
+
+                    if data_days == 0:
+                        continue
+                    avg_per_day = total_msgs / data_days
+                    if avg_per_day > max_messages_per_day:
+                        continue
+                    if avg_per_day == 0:
+                        continue  # Handled by scenario 1
+                except Exception:
+                    continue
+
+                sku_name = ns.sku.name if ns.sku else 'Standard'
+                capacity = ns.sku.capacity if ns.sku and ns.sku.capacity else 1
+                monthly_cost = self._calculate_eventhub_namespace_cost(sku_name, capacity)
+
+                metadata = {
+                    'namespace_name': ns.name,
+                    'namespace_id': ns.id,
+                    'sku': f"{sku_name} (x{capacity})",
+                    'avg_incoming_messages_per_day': round(avg_per_day, 1),
+                    'observation_days': observation_days,
+                    'orphan_reason': f"Event Hubs '{ns.name}' very low traffic: {avg_per_day:.0f} msgs/day avg",
+                    'recommendation': 'Consider downgrading tier or consolidating with another namespace',
+                    'confidence_level': 'high' if avg_per_day < 10 else 'medium',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='eventhub_low_incoming_messages',
+                    resource_id=ns.id,
+                    resource_name=ns.name,
+                    region=ns.location,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning low-traffic Event Hubs in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_eventhub_low_outgoing_messages(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Event Hubs with events produced but not consumed.
+        SCENARIO 12: eventhub_low_outgoing_messages - Consumers not reading.
+        """
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.eventhub import EventHubManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans: list[OrphanResourceData] = []
+        min_ratio = detection_rules.get("min_outgoing_to_incoming_ratio", 0.1) if detection_rules else 0.1
+        observation_days = detection_rules.get("min_observation_days", 14) if detection_rules else 14
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            eh_client = EventHubManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+
+            for ns in eh_client.namespaces.list():
+                ns_location = ns.location.lower().replace(" ", "") if ns.location else ""
+                target_region = region.lower().replace(" ", "")
+                if ns_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(ns.id):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        ns.id,
+                        metric_names=["IncomingMessages", "OutgoingMessages"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.TOTAL]
+                    )
+
+                    total_in = 0
+                    total_out = 0
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.total is not None:
+                                    if 'incoming' in metric.name.lower():
+                                        total_in += dp.total
+                                    elif 'outgoing' in metric.name.lower():
+                                        total_out += dp.total
+
+                    if total_in < 100:
+                        continue  # Not enough data
+
+                    ratio = total_out / total_in if total_in > 0 else 0
+                    if ratio >= min_ratio:
+                        continue
+                except Exception:
+                    continue
+
+                sku_name = ns.sku.name if ns.sku else 'Standard'
+                capacity = ns.sku.capacity if ns.sku and ns.sku.capacity else 1
+                monthly_cost = self._calculate_eventhub_namespace_cost(sku_name, capacity)
+
+                metadata = {
+                    'namespace_name': ns.name,
+                    'namespace_id': ns.id,
+                    'sku': f"{sku_name} (x{capacity})",
+                    'total_incoming': int(total_in),
+                    'total_outgoing': int(total_out),
+                    'outgoing_ratio': round(ratio, 3),
+                    'observation_days': observation_days,
+                    'orphan_reason': f"Event Hubs '{ns.name}' has {total_in} incoming but only {total_out} outgoing messages ({ratio:.1%} read)",
+                    'recommendation': 'Check consumer applications - events are produced but not consumed',
+                    'confidence_level': 'high' if ratio < 0.01 else 'medium',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='eventhub_low_outgoing_messages',
+                    resource_id=ns.id,
+                    resource_name=ns.name,
+                    region=ns.location,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning low outgoing Event Hubs in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_eventhub_low_throughput_utilization(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Event Hubs with TU utilization <10%.
+        SCENARIO 13: eventhub_low_throughput_utilization - Over-provisioned.
+        """
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.eventhub import EventHubManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans: list[OrphanResourceData] = []
+        max_utilization = detection_rules.get("max_throughput_utilization_percent", 10) if detection_rules else 10
+        observation_days = detection_rules.get("min_observation_days", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            eh_client = EventHubManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+
+            for ns in eh_client.namespaces.list():
+                ns_location = ns.location.lower().replace(" ", "") if ns.location else ""
+                target_region = region.lower().replace(" ", "")
+                if ns_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(ns.id):
+                    continue
+
+                sku_name = ns.sku.name if ns.sku else 'Standard'
+                if sku_name.upper() in ('PREMIUM', 'DEDICATED'):
+                    continue
+
+                capacity = ns.sku.capacity if ns.sku and ns.sku.capacity else 1
+
+                try:
+                    response = metrics_client.query_resource(
+                        ns.id,
+                        metric_names=["IncomingBytes", "OutgoingBytes"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.AVERAGE]
+                    )
+
+                    avg_in_bytes = 0.0
+                    avg_out_bytes = 0.0
+                    for metric in response.metrics:
+                        values = [dp.average for ts in metric.timeseries for dp in ts.data if dp.average is not None]
+                        if values:
+                            avg_val = sum(values) / len(values)
+                            if 'incoming' in metric.name.lower():
+                                avg_in_bytes = avg_val
+                            elif 'outgoing' in metric.name.lower():
+                                avg_out_bytes = avg_val
+
+                    # 1 TU = 1 MB/s ingress + 2 MB/s egress
+                    ingress_utilization = (avg_in_bytes / (capacity * 1024 * 1024)) * 100 if capacity > 0 else 0
+                    egress_utilization = (avg_out_bytes / (capacity * 2 * 1024 * 1024)) * 100 if capacity > 0 else 0
+                    max_util = max(ingress_utilization, egress_utilization)
+
+                    if max_util >= max_utilization:
+                        continue
+                except Exception:
+                    continue
+
+                current_cost = self._calculate_eventhub_namespace_cost(sku_name, capacity)
+                recommended_tus = max(1, int(capacity * (max_util / 100) * 2) + 1)
+                recommended_cost = self._calculate_eventhub_namespace_cost(sku_name, recommended_tus)
+                savings = current_cost - recommended_cost
+
+                metadata = {
+                    'namespace_name': ns.name,
+                    'namespace_id': ns.id,
+                    'sku': f"{sku_name} (x{capacity} TUs)",
+                    'ingress_utilization_percent': round(ingress_utilization, 1),
+                    'egress_utilization_percent': round(egress_utilization, 1),
+                    'max_utilization_percent': round(max_util, 1),
+                    'observation_days': observation_days,
+                    'recommended_tus': recommended_tus,
+                    'estimated_savings': round(savings, 2),
+                    'orphan_reason': f"Event Hubs '{ns.name}' TU utilization {max_util:.1f}% (threshold: {max_utilization}%)",
+                    'recommendation': f'Reduce to {recommended_tus} TUs to save ~${savings:.0f}/month',
+                    'confidence_level': 'high' if max_util < 3 else 'medium',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='eventhub_low_throughput_utilization',
+                    resource_id=ns.id,
+                    resource_name=ns.name,
+                    region=ns.location,
+                    estimated_monthly_cost=current_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning low TU utilization Event Hubs in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_eventhub_high_throttled_requests(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Event Hubs with high throttled request rate.
+        SCENARIO 14: eventhub_high_throttled_requests - Upgrade needed.
+        """
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.eventhub import EventHubManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans: list[OrphanResourceData] = []
+        min_throttled_per_day = detection_rules.get("min_throttled_requests_per_day", 100) if detection_rules else 100
+        observation_days = detection_rules.get("min_observation_days", 7) if detection_rules else 7
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            eh_client = EventHubManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+
+            for ns in eh_client.namespaces.list():
+                ns_location = ns.location.lower().replace(" ", "") if ns.location else ""
+                target_region = region.lower().replace(" ", "")
+                if ns_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(ns.id):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        ns.id,
+                        metric_names=["ThrottledRequests"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.TOTAL]
+                    )
+
+                    total_throttled = 0
+                    data_days = 0
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.total is not None:
+                                    total_throttled += dp.total
+                                    data_days += 1
+
+                    avg_per_day = total_throttled / max(data_days, 1)
+                    if avg_per_day < min_throttled_per_day:
+                        continue
+                except Exception:
+                    continue
+
+                sku_name = ns.sku.name if ns.sku else 'Standard'
+                capacity = ns.sku.capacity if ns.sku and ns.sku.capacity else 1
+                monthly_cost = self._calculate_eventhub_namespace_cost(sku_name, capacity)
+
+                metadata = {
+                    'namespace_name': ns.name,
+                    'namespace_id': ns.id,
+                    'sku': f"{sku_name} (x{capacity})",
+                    'avg_throttled_per_day': round(avg_per_day, 0),
+                    'total_throttled': int(total_throttled),
+                    'observation_days': observation_days,
+                    'orphan_reason': f"Event Hubs '{ns.name}' has {avg_per_day:.0f} throttled requests/day - capacity exceeded",
+                    'recommendation': 'Increase TUs/PUs or enable auto-inflate to prevent throttling',
+                    'confidence_level': 'critical' if avg_per_day > 1000 else 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='eventhub_high_throttled_requests',
+                    resource_id=ns.id,
+                    resource_name=ns.name,
+                    region=ns.location,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning throttled Event Hubs in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_eventhub_zero_active_connections(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Event Hubs with 0 active connections.
+        SCENARIO 15: eventhub_zero_active_connections - No clients connected.
+        """
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.eventhub import EventHubManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans: list[OrphanResourceData] = []
+        observation_days = detection_rules.get("min_observation_days", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            eh_client = EventHubManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+
+            for ns in eh_client.namespaces.list():
+                ns_location = ns.location.lower().replace(" ", "") if ns.location else ""
+                target_region = region.lower().replace(" ", "")
+                if ns_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(ns.id):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        ns.id,
+                        metric_names=["ActiveConnections"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.MAXIMUM]
+                    )
+
+                    max_connections = 0
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.maximum is not None and dp.maximum > max_connections:
+                                    max_connections = dp.maximum
+
+                    if max_connections > 0:
+                        continue
+                except Exception:
+                    continue
+
+                sku_name = ns.sku.name if ns.sku else 'Standard'
+                capacity = ns.sku.capacity if ns.sku and ns.sku.capacity else 1
+                monthly_cost = self._calculate_eventhub_namespace_cost(sku_name, capacity)
+
+                metadata = {
+                    'namespace_name': ns.name,
+                    'namespace_id': ns.id,
+                    'sku': f"{sku_name} (x{capacity})",
+                    'max_active_connections': 0,
+                    'observation_days': observation_days,
+                    'orphan_reason': f"Event Hubs '{ns.name}' has 0 active connections for {observation_days} days",
+                    'recommendation': 'Delete namespace - no clients connected',
+                    'confidence_level': 'critical',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='eventhub_zero_active_connections',
+                    resource_id=ns.id,
+                    resource_name=ns.name,
+                    region=ns.location,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning zero-connection Event Hubs in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_eventhub_low_capture_utilization(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Event Hubs with Capture enabled but near-zero captured messages.
+        SCENARIO 16: eventhub_low_capture_utilization - Paying for unused Capture.
+        """
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.eventhub import EventHubManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans: list[OrphanResourceData] = []
+        observation_days = detection_rules.get("min_observation_days", 14) if detection_rules else 14
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            eh_client = EventHubManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+
+            for ns in eh_client.namespaces.list():
+                ns_location = ns.location.lower().replace(" ", "") if ns.location else ""
+                target_region = region.lower().replace(" ", "")
+                if ns_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(ns.id):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        ns.id,
+                        metric_names=["CapturedMessages"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.TOTAL]
+                    )
+
+                    total_captured = 0
+                    has_data = False
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                has_data = True
+                                if dp.total is not None:
+                                    total_captured += dp.total
+
+                    if not has_data:
+                        continue
+                    if total_captured > 0:
+                        continue
+                except Exception:
+                    continue
+
+                sku_name = ns.sku.name if ns.sku else 'Standard'
+                capacity = ns.sku.capacity if ns.sku and ns.sku.capacity else 1
+                # Capture costs ~$0.10/hour per capture unit
+                capture_cost = 73.0  # ~$0.10/hr * 730 hrs
+
+                metadata = {
+                    'namespace_name': ns.name,
+                    'namespace_id': ns.id,
+                    'sku': f"{sku_name} (x{capacity})",
+                    'total_captured_messages': 0,
+                    'observation_days': observation_days,
+                    'orphan_reason': f"Event Hubs '{ns.name}' Capture enabled but 0 messages captured in {observation_days} days",
+                    'recommendation': 'Disable Capture if not needed to save ~$73/month',
+                    'confidence_level': 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='eventhub_low_capture_utilization',
+                    resource_id=ns.id,
+                    resource_name=ns.name,
+                    region=ns.location,
+                    estimated_monthly_cost=capture_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning low capture Event Hubs in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_eventhub_high_server_errors(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Event Hubs with high server error rate.
+        SCENARIO 17: eventhub_high_server_errors - Misconfigured or failing.
+        """
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.eventhub import EventHubManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans: list[OrphanResourceData] = []
+        max_error_rate = detection_rules.get("max_error_rate_percent", 10) if detection_rules else 10
+        observation_days = detection_rules.get("min_observation_days", 7) if detection_rules else 7
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            eh_client = EventHubManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+
+            for ns in eh_client.namespaces.list():
+                ns_location = ns.location.lower().replace(" ", "") if ns.location else ""
+                target_region = region.lower().replace(" ", "")
+                if ns_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(ns.id):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        ns.id,
+                        metric_names=["SuccessfulRequests", "ServerErrors"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.TOTAL]
+                    )
+
+                    total_success = 0
+                    total_errors = 0
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.total is not None:
+                                    if 'success' in metric.name.lower():
+                                        total_success += dp.total
+                                    elif 'error' in metric.name.lower():
+                                        total_errors += dp.total
+
+                    total_requests = total_success + total_errors
+                    if total_requests < 100:
+                        continue
+
+                    error_rate = (total_errors / total_requests) * 100
+                    if error_rate < max_error_rate:
+                        continue
+                except Exception:
+                    continue
+
+                sku_name = ns.sku.name if ns.sku else 'Standard'
+                capacity = ns.sku.capacity if ns.sku and ns.sku.capacity else 1
+                monthly_cost = self._calculate_eventhub_namespace_cost(sku_name, capacity)
+
+                metadata = {
+                    'namespace_name': ns.name,
+                    'namespace_id': ns.id,
+                    'sku': f"{sku_name} (x{capacity})",
+                    'total_successful': int(total_success),
+                    'total_server_errors': int(total_errors),
+                    'error_rate_percent': round(error_rate, 1),
+                    'observation_days': observation_days,
+                    'orphan_reason': f"Event Hubs '{ns.name}' has {error_rate:.1f}% server error rate",
+                    'recommendation': 'Investigate server errors - wasting TU capacity on failed requests',
+                    'confidence_level': 'critical' if error_rate > 50 else 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='eventhub_high_server_errors',
+                    resource_id=ns.id,
+                    resource_name=ns.name,
+                    region=ns.location,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning high-error Event Hubs in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_eventhub_low_incoming_bytes(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Event Hubs with near-zero incoming bytes.
+        SCENARIO 18: eventhub_low_incoming_bytes - Namespace barely used.
+        """
+        from datetime import datetime, timezone, timedelta
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.eventhub import EventHubManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        orphans: list[OrphanResourceData] = []
+        max_mb_per_day = detection_rules.get("max_incoming_mb_per_day", 1.0) if detection_rules else 1.0
+        observation_days = detection_rules.get("min_observation_days", 30) if detection_rules else 30
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            eh_client = EventHubManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=observation_days)
+
+            for ns in eh_client.namespaces.list():
+                ns_location = ns.location.lower().replace(" ", "") if ns.location else ""
+                target_region = region.lower().replace(" ", "")
+                if ns_location != target_region:
+                    continue
+                if not self._is_resource_in_scope(ns.id):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        ns.id,
+                        metric_names=["IncomingBytes"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.TOTAL]
+                    )
+
+                    total_bytes = 0
+                    data_days = 0
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.total is not None:
+                                    total_bytes += dp.total
+                                    data_days += 1
+
+                    if data_days == 0:
+                        continue
+
+                    avg_mb_per_day = (total_bytes / (1024 * 1024)) / data_days
+                    if avg_mb_per_day > max_mb_per_day:
+                        continue
+                    if avg_mb_per_day == 0:
+                        continue  # Handled by scenario 1
+                except Exception:
+                    continue
+
+                sku_name = ns.sku.name if ns.sku else 'Standard'
+                capacity = ns.sku.capacity if ns.sku and ns.sku.capacity else 1
+                monthly_cost = self._calculate_eventhub_namespace_cost(sku_name, capacity)
+
+                metadata = {
+                    'namespace_name': ns.name,
+                    'namespace_id': ns.id,
+                    'sku': f"{sku_name} (x{capacity})",
+                    'avg_incoming_mb_per_day': round(avg_mb_per_day, 3),
+                    'observation_days': observation_days,
+                    'orphan_reason': f"Event Hubs '{ns.name}' near-zero traffic: {avg_mb_per_day:.3f} MB/day",
+                    'recommendation': 'Downgrade tier or delete - barely used namespace',
+                    'confidence_level': 'high' if avg_mb_per_day < 0.01 else 'medium',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='eventhub_low_incoming_bytes',
+                    resource_id=ns.id,
+                    resource_name=ns.name,
+                    region=ns.location,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+        except Exception as e:
+            print(f"Error scanning low bytes Event Hubs in {region}: {str(e)}")
 
         return orphans
 
