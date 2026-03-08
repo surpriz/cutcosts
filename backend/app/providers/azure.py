@@ -1285,6 +1285,116 @@ class AzureProvider(CloudProviderBase):
         eh_low_bytes = await self.scan_eventhub_low_incoming_bytes(region, rules.get("eventhub_low_incoming_bytes"))
         results.extend(eh_low_bytes)
 
+        # ===== Azure NetApp Files Waste Detection (18 scenarios) =====
+        netapp_idle_vol = await self.scan_netapp_volume_idle(region, rules.get("netapp_volume_idle"))
+        results.extend(netapp_idle_vol)
+
+        netapp_premium_dev = await self.scan_netapp_premium_in_dev(region, rules.get("netapp_premium_in_dev"))
+        results.extend(netapp_premium_dev)
+
+        netapp_over_prov = await self.scan_netapp_volume_over_provisioned(region, rules.get("netapp_volume_over_provisioned"))
+        results.extend(netapp_over_prov)
+
+        netapp_no_snap = await self.scan_netapp_no_snapshot_policy(region, rules.get("netapp_no_snapshot_policy"))
+        results.extend(netapp_no_snap)
+
+        netapp_orphan_snap = await self.scan_netapp_orphan_snapshots(region, rules.get("netapp_orphan_snapshots"))
+        results.extend(netapp_orphan_snap)
+
+        netapp_no_repl = await self.scan_netapp_no_replication(region, rules.get("netapp_no_replication"))
+        results.extend(netapp_no_repl)
+
+        netapp_old_snap = await self.scan_netapp_old_snapshots(region, rules.get("netapp_old_snapshots"))
+        results.extend(netapp_old_snap)
+
+        netapp_empty_pool = await self.scan_netapp_empty_capacity_pool(region, rules.get("netapp_empty_capacity_pool"))
+        results.extend(netapp_empty_pool)
+
+        netapp_pool_over = await self.scan_netapp_pool_over_provisioned(region, rules.get("netapp_pool_over_provisioned"))
+        results.extend(netapp_pool_over)
+
+        netapp_multi_pool = await self.scan_netapp_multiple_pools_consolidation(region, rules.get("netapp_multiple_pools_consolidation"))
+        results.extend(netapp_multi_pool)
+
+        netapp_low_iops = await self.scan_netapp_low_iops(region, rules.get("netapp_low_iops"))
+        results.extend(netapp_low_iops)
+
+        netapp_low_throughput = await self.scan_netapp_low_throughput(region, rules.get("netapp_low_throughput"))
+        results.extend(netapp_low_throughput)
+
+        netapp_low_read = await self.scan_netapp_low_read_ops(region, rules.get("netapp_low_read_ops"))
+        results.extend(netapp_low_read)
+
+        netapp_low_write = await self.scan_netapp_low_write_ops(region, rules.get("netapp_low_write_ops"))
+        results.extend(netapp_low_write)
+
+        netapp_high_latency = await self.scan_netapp_high_latency(region, rules.get("netapp_high_latency"))
+        results.extend(netapp_high_latency)
+
+        netapp_low_alloc = await self.scan_netapp_low_volume_allocated(region, rules.get("netapp_low_volume_allocated"))
+        results.extend(netapp_low_alloc)
+
+        netapp_low_snap_usage = await self.scan_netapp_low_snapshot_usage(region, rules.get("netapp_low_snapshot_usage"))
+        results.extend(netapp_low_snap_usage)
+
+        netapp_pool_util = await self.scan_netapp_pool_low_utilization(region, rules.get("netapp_pool_low_utilization"))
+        results.extend(netapp_pool_util)
+
+        # ===== Azure Cognitive Search Waste Detection (18 scenarios) =====
+        search_idle = await self.scan_search_service_idle(region, rules.get("search_service_idle"))
+        results.extend(search_idle)
+
+        search_premium_dev = await self.scan_search_premium_in_dev(region, rules.get("search_premium_in_dev"))
+        results.extend(search_premium_dev)
+
+        search_no_indexes = await self.scan_search_no_indexes(region, rules.get("search_no_indexes"))
+        results.extend(search_no_indexes)
+
+        search_over_prov = await self.scan_search_over_provisioned_replicas(region, rules.get("search_over_provisioned_replicas"))
+        results.extend(search_over_prov)
+
+        search_no_private = await self.scan_search_no_private_endpoint(region, rules.get("search_no_private_endpoint"))
+        results.extend(search_no_private)
+
+        search_old_api = await self.scan_search_old_api_version(region, rules.get("search_old_api_version"))
+        results.extend(search_old_api)
+
+        search_multi_svc = await self.scan_search_multiple_services_same_rg(region, rules.get("search_multiple_services_same_rg"))
+        results.extend(search_multi_svc)
+
+        search_excess_part = await self.scan_search_excessive_partitions(region, rules.get("search_excessive_partitions"))
+        results.extend(search_excess_part)
+
+        search_no_diag = await self.scan_search_no_diagnostic_logs(region, rules.get("search_no_diagnostic_logs"))
+        results.extend(search_no_diag)
+
+        search_free_prod = await self.scan_search_free_tier_in_production(region, rules.get("search_free_tier_in_production"))
+        results.extend(search_free_prod)
+
+        search_low_queries = await self.scan_search_low_query_volume(region, rules.get("search_low_query_volume"))
+        results.extend(search_low_queries)
+
+        search_low_docs = await self.scan_search_low_document_count(region, rules.get("search_low_document_count"))
+        results.extend(search_low_docs)
+
+        search_high_latency = await self.scan_search_high_query_latency(region, rules.get("search_high_query_latency"))
+        results.extend(search_high_latency)
+
+        search_high_throttle = await self.scan_search_high_throttled_queries(region, rules.get("search_high_throttled_queries"))
+        results.extend(search_high_throttle)
+
+        search_low_cpu = await self.scan_search_low_cpu_utilization(region, rules.get("search_low_cpu_utilization"))
+        results.extend(search_low_cpu)
+
+        search_low_storage = await self.scan_search_low_storage_utilization(region, rules.get("search_low_storage_utilization"))
+        results.extend(search_low_storage)
+
+        search_low_skill = await self.scan_search_low_skillset_executions(region, rules.get("search_low_skillset_executions"))
+        results.extend(search_low_skill)
+
+        search_low_indexer = await self.scan_search_low_indexer_utilization(region, rules.get("search_low_indexer_utilization"))
+        results.extend(search_low_indexer)
+
         # ===== Azure AKS Clusters Waste Detection (10 Scenarios) - BONUS =====
         aks_clusters = await self.scan_idle_eks_clusters(region, rules.get("azure_aks_cluster"))
         results.extend(aks_clusters)
@@ -11901,6 +12011,54 @@ class AzureProvider(CloudProviderBase):
         """Check if Event Hubs namespace is Premium or Dedicated."""
         return sku_name.upper() in ('PREMIUM', 'DEDICATED')
 
+    # ===== Azure NetApp Files Helpers =====
+
+    def _calculate_netapp_volume_cost(self, service_level: str, quota_in_gib: float) -> float:
+        """
+        Calculate monthly cost for Azure NetApp Files volume.
+
+        Pricing (US East, per GiB/month):
+        - Standard: $0.155/GiB
+        - Premium: $0.310/GiB
+        - Ultra: $0.465/GiB
+        """
+        cost_per_gib = {
+            'STANDARD': 0.155,
+            'PREMIUM': 0.310,
+            'ULTRA': 0.465,
+        }
+        unit_cost = cost_per_gib.get(service_level.upper(), 0.155)
+        return unit_cost * quota_in_gib
+
+    def _calculate_netapp_pool_cost(self, service_level: str, size_tib: float) -> float:
+        """
+        Calculate monthly cost for Azure NetApp Files capacity pool.
+
+        Pricing (US East, per TiB/month):
+        - Standard: $158.72/TiB
+        - Premium: $317.44/TiB
+        - Ultra: $476.16/TiB
+        """
+        cost_per_tib = {
+            'STANDARD': 158.72,
+            'PREMIUM': 317.44,
+            'ULTRA': 476.16,
+        }
+        unit_cost = cost_per_tib.get(service_level.upper(), 158.72)
+        return unit_cost * size_tib
+
+    def _is_netapp_premium_tier(self, service_level: str) -> bool:
+        """Check if NetApp Files service level is Premium or Ultra."""
+        return service_level.upper() in ('PREMIUM', 'ULTRA')
+
+    def _get_netapp_recommended_downgrade(self, service_level: str) -> str | None:
+        """Get recommended service level downgrade."""
+        downgrades = {
+            'ULTRA': 'Premium',
+            'PREMIUM': 'Standard',
+        }
+        return downgrades.get(service_level.upper())
+
     # ===== Azure Event Hubs Scanners (18 scenarios) =====
 
     async def scan_eventhub_namespace_idle(
@@ -13396,6 +13554,3761 @@ class AzureProvider(CloudProviderBase):
                 ))
         except Exception as e:
             print(f"Error scanning low bytes Event Hubs in {region}: {str(e)}")
+
+        return orphans
+
+    # ===== Azure Cognitive Search Helpers =====
+
+    def _calculate_search_service_cost(self, sku_name: str, replica_count: int = 1, partition_count: int = 1) -> float:
+        """
+        Calculate monthly cost for Azure Cognitive Search service.
+
+        Pricing (US East, per search unit/month):
+        - Free: $0
+        - Basic: $75.78
+        - S1 (Standard): $252.57
+        - S2: $1,010.30
+        - S3: $2,020.59
+        - S3HD: $2,424.71
+        - L1 (Storage Optimized): $3,030.89
+        - L2: $6,061.78
+        """
+        cost_per_su = {
+            'FREE': 0.0,
+            'BASIC': 75.78,
+            'S1': 252.57,
+            'STANDARD': 252.57,
+            'S2': 1010.30,
+            'S3': 2020.59,
+            'S3HD': 2424.71,
+            'L1': 3030.89,
+            'L2': 6061.78,
+        }
+        unit_cost = cost_per_su.get(sku_name.upper(), 252.57)
+        search_units = replica_count * partition_count
+        return unit_cost * search_units
+
+    def _is_search_premium_tier(self, sku_name: str) -> bool:
+        """Check if search service SKU is premium/expensive."""
+        return sku_name.upper() in ('S2', 'S3', 'S3HD', 'L1', 'L2')
+
+    def _is_search_free_tier(self, sku_name: str) -> bool:
+        """Check if search service is Free tier."""
+        return sku_name.upper() == 'FREE'
+
+    def _get_search_recommended_downsize(self, sku_name: str) -> str | None:
+        """Get recommended SKU downgrade for search service."""
+        downgrades = {
+            'L2': 'L1',
+            'L1': 'S3',
+            'S3HD': 'S3',
+            'S3': 'S2',
+            'S2': 'S1',
+            'S1': 'Basic',
+        }
+        return downgrades.get(sku_name.upper())
+
+    # ===== Azure NetApp Files Scanners (18 scenarios) =====
+
+    # Phase 1 - NetApp Files Property-based detection (10 scenarios)
+
+    async def scan_netapp_volume_idle(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for idle Azure NetApp Files volumes with no client connections.
+
+        Detects volumes that have had zero mount connections for 30+ days,
+        indicating the volume is provisioned but unused.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of idle NetApp volumes
+        """
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.netapp import NetAppManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        idle_days = rules.get("idle_days", 30)
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            netapp_client = NetAppManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=idle_days)
+
+            for account in netapp_client.accounts.list_by_subscription():
+                if account.location and account.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(account.id):
+                    continue
+
+                # Parse account RG and name from ID
+                parts = account.id.split('/')
+                rg_idx = parts.index('resourceGroups')
+                rg_name = parts[rg_idx + 1]
+                account_name = account.name
+
+                for pool in netapp_client.pools.list(rg_name, account_name):
+                    pool_name = pool.name.split('/')[-1] if '/' in pool.name else pool.name
+
+                    for volume in netapp_client.volumes.list(rg_name, account_name, pool_name):
+                        vol_name = volume.name.split('/')[-1] if '/' in volume.name else volume.name
+                        try:
+                            response = metrics_client.query_resource(
+                                volume.id,
+                                metric_names=["VolumeAllocatedSize"],
+                                timespan=(start_time, end_time),
+                                granularity=timedelta(days=1),
+                                aggregations=[MetricAggregationType.AVERAGE]
+                            )
+
+                            has_activity = False
+                            for metric in response.metrics:
+                                for ts in metric.timeseries:
+                                    for dp in ts.data:
+                                        if dp.average and dp.average > 0:
+                                            has_activity = True
+                                            break
+
+                            if has_activity:
+                                continue
+
+                            service_level = pool.service_level or 'Standard'
+                            quota_gib = (volume.usage_threshold or 0) / (1024 ** 3)
+                            monthly_cost = self._calculate_netapp_volume_cost(service_level, quota_gib)
+
+                            age_days = 0
+                            if volume.creation_token:
+                                try:
+                                    created = volume.system_data.created_at if hasattr(volume, 'system_data') and volume.system_data else None
+                                    if created:
+                                        age_days = (end_time - created).days
+                                except Exception:
+                                    pass
+
+                            metadata = {
+                                'volume_name': vol_name,
+                                'volume_id': volume.id,
+                                'pool_name': pool_name,
+                                'account_name': account_name,
+                                'service_level': service_level,
+                                'quota_gib': quota_gib,
+                                'idle_days': idle_days,
+                                'orphan_reason': f"NetApp volume '{vol_name}' has no activity for {idle_days}+ days",
+                                'recommendation': 'Delete volume or migrate data to cheaper storage tier',
+                                'confidence_level': self._calculate_confidence_level(age_days, rules),
+                            }
+
+                            orphans.append(OrphanResourceData(
+                                resource_type='netapp_volume_idle',
+                                resource_id=volume.id,
+                                resource_name=vol_name,
+                                region=region,
+                                estimated_monthly_cost=monthly_cost,
+                                resource_metadata=metadata
+                            ))
+                        except Exception:
+                            continue
+
+        except Exception as e:
+            print(f"Error scanning idle NetApp volumes in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_netapp_premium_in_dev(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Premium/Ultra NetApp volumes in dev/test environments.
+
+        Detects volumes using expensive service levels in non-production
+        environments where Standard tier would suffice.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of premium NetApp volumes in dev environments
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.netapp import NetAppManagementClient
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        dev_keywords = ['dev', 'test', 'staging', 'sandbox', 'poc', 'demo', 'lab', 'trial', 'qa']
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            netapp_client = NetAppManagementClient(credential, self.subscription_id)
+
+            for account in netapp_client.accounts.list_by_subscription():
+                if account.location and account.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(account.id):
+                    continue
+
+                parts = account.id.split('/')
+                rg_idx = parts.index('resourceGroups')
+                rg_name = parts[rg_idx + 1]
+                account_name = account.name
+
+                # Check if dev env
+                name_lower = account_name.lower()
+                rg_lower = rg_name.lower()
+                tags = account.tags or {}
+                env_tag = tags.get('environment', tags.get('env', '')).lower()
+                is_dev = (
+                    any(kw in name_lower for kw in dev_keywords)
+                    or any(kw in rg_lower for kw in dev_keywords)
+                    or any(kw in env_tag for kw in dev_keywords)
+                )
+
+                if not is_dev:
+                    continue
+
+                for pool in netapp_client.pools.list(rg_name, account_name):
+                    service_level = pool.service_level or 'Standard'
+                    if not self._is_netapp_premium_tier(service_level):
+                        continue
+
+                    pool_name = pool.name.split('/')[-1] if '/' in pool.name else pool.name
+                    size_tib = (pool.size or 0) / (1024 ** 4)
+                    monthly_cost = self._calculate_netapp_pool_cost(service_level, size_tib)
+                    standard_cost = self._calculate_netapp_pool_cost('Standard', size_tib)
+                    savings = monthly_cost - standard_cost
+
+                    metadata = {
+                        'pool_name': pool_name,
+                        'pool_id': pool.id,
+                        'account_name': account_name,
+                        'service_level': service_level,
+                        'size_tib': round(size_tib, 2),
+                        'environment': env_tag or 'detected from name/rg',
+                        'current_cost': round(monthly_cost, 2),
+                        'standard_cost': round(standard_cost, 2),
+                        'potential_savings': round(savings, 2),
+                        'orphan_reason': f"NetApp pool '{pool_name}' uses {service_level} tier in dev/test environment",
+                        'recommendation': f'Downgrade to Standard tier to save ~${savings:.0f}/month',
+                        'confidence_level': 'high',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='netapp_premium_in_dev',
+                        resource_id=pool.id,
+                        resource_name=pool_name,
+                        region=region,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata=metadata
+                    ))
+
+        except Exception as e:
+            print(f"Error scanning premium NetApp in dev in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_netapp_volume_over_provisioned(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for over-provisioned NetApp volumes (usage < 20% of quota).
+
+        Detects volumes where the consumed size is well below the provisioned
+        quota, indicating the volume can be resized to reduce cost.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of over-provisioned NetApp volumes
+        """
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.netapp import NetAppManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        usage_threshold_pct = rules.get("usage_threshold_pct", 20)
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            netapp_client = NetAppManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=7)
+
+            for account in netapp_client.accounts.list_by_subscription():
+                if account.location and account.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(account.id):
+                    continue
+
+                parts = account.id.split('/')
+                rg_idx = parts.index('resourceGroups')
+                rg_name = parts[rg_idx + 1]
+                account_name = account.name
+
+                for pool in netapp_client.pools.list(rg_name, account_name):
+                    pool_name = pool.name.split('/')[-1] if '/' in pool.name else pool.name
+                    service_level = pool.service_level or 'Standard'
+
+                    for volume in netapp_client.volumes.list(rg_name, account_name, pool_name):
+                        vol_name = volume.name.split('/')[-1] if '/' in volume.name else volume.name
+                        quota_bytes = volume.usage_threshold or 0
+                        if quota_bytes == 0:
+                            continue
+
+                        try:
+                            response = metrics_client.query_resource(
+                                volume.id,
+                                metric_names=["VolumeLogicalSize"],
+                                timespan=(start_time, end_time),
+                                granularity=timedelta(days=1),
+                                aggregations=[MetricAggregationType.AVERAGE]
+                            )
+
+                            max_used = 0
+                            for metric in response.metrics:
+                                for ts in metric.timeseries:
+                                    for dp in ts.data:
+                                        if dp.average and dp.average > max_used:
+                                            max_used = dp.average
+
+                            usage_pct = (max_used / quota_bytes) * 100 if quota_bytes > 0 else 0
+                            if usage_pct >= usage_threshold_pct:
+                                continue
+
+                            quota_gib = quota_bytes / (1024 ** 3)
+                            used_gib = max_used / (1024 ** 3)
+                            monthly_cost = self._calculate_netapp_volume_cost(service_level, quota_gib)
+                            right_sized_gib = max(used_gib * 2, 100)  # 2x headroom, min 100 GiB
+                            right_cost = self._calculate_netapp_volume_cost(service_level, right_sized_gib)
+                            savings = monthly_cost - right_cost
+
+                            metadata = {
+                                'volume_name': vol_name,
+                                'volume_id': volume.id,
+                                'pool_name': pool_name,
+                                'service_level': service_level,
+                                'quota_gib': round(quota_gib, 2),
+                                'used_gib': round(used_gib, 2),
+                                'usage_pct': round(usage_pct, 1),
+                                'threshold_pct': usage_threshold_pct,
+                                'recommended_gib': round(right_sized_gib, 2),
+                                'potential_savings': round(savings, 2),
+                                'orphan_reason': f"NetApp volume '{vol_name}' uses {usage_pct:.1f}% of {quota_gib:.0f} GiB quota",
+                                'recommendation': f'Resize volume to {right_sized_gib:.0f} GiB to save ~${savings:.0f}/month',
+                                'confidence_level': 'high' if usage_pct < 10 else 'medium',
+                            }
+
+                            orphans.append(OrphanResourceData(
+                                resource_type='netapp_volume_over_provisioned',
+                                resource_id=volume.id,
+                                resource_name=vol_name,
+                                region=region,
+                                estimated_monthly_cost=monthly_cost,
+                                resource_metadata=metadata
+                            ))
+                        except Exception:
+                            continue
+
+        except Exception as e:
+            print(f"Error scanning over-provisioned NetApp volumes in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_netapp_no_snapshot_policy(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for NetApp volumes without a snapshot policy configured.
+
+        Volumes without snapshot policies lack automated backup protection,
+        which is both a risk and may indicate the volume is not properly managed.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of NetApp volumes without snapshot policies
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.netapp import NetAppManagementClient
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            netapp_client = NetAppManagementClient(credential, self.subscription_id)
+
+            for account in netapp_client.accounts.list_by_subscription():
+                if account.location and account.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(account.id):
+                    continue
+
+                parts = account.id.split('/')
+                rg_idx = parts.index('resourceGroups')
+                rg_name = parts[rg_idx + 1]
+                account_name = account.name
+
+                for pool in netapp_client.pools.list(rg_name, account_name):
+                    pool_name = pool.name.split('/')[-1] if '/' in pool.name else pool.name
+                    service_level = pool.service_level or 'Standard'
+
+                    for volume in netapp_client.volumes.list(rg_name, account_name, pool_name):
+                        vol_name = volume.name.split('/')[-1] if '/' in volume.name else volume.name
+
+                        # Check if volume has a snapshot policy
+                        snapshot_policy_id = None
+                        if hasattr(volume, 'data_protection') and volume.data_protection:
+                            if hasattr(volume.data_protection, 'snapshot') and volume.data_protection.snapshot:
+                                snapshot_policy_id = volume.data_protection.snapshot.snapshot_policy_id
+
+                        if snapshot_policy_id:
+                            continue
+
+                        quota_gib = (volume.usage_threshold or 0) / (1024 ** 3)
+                        monthly_cost = self._calculate_netapp_volume_cost(service_level, quota_gib)
+
+                        metadata = {
+                            'volume_name': vol_name,
+                            'volume_id': volume.id,
+                            'pool_name': pool_name,
+                            'service_level': service_level,
+                            'quota_gib': round(quota_gib, 2),
+                            'orphan_reason': f"NetApp volume '{vol_name}' has no snapshot policy configured",
+                            'recommendation': 'Configure a snapshot policy for automated backup protection',
+                            'confidence_level': 'medium',
+                        }
+
+                        orphans.append(OrphanResourceData(
+                            resource_type='netapp_no_snapshot_policy',
+                            resource_id=volume.id,
+                            resource_name=vol_name,
+                            region=region,
+                            estimated_monthly_cost=monthly_cost,
+                            resource_metadata=metadata
+                        ))
+
+        except Exception as e:
+            print(f"Error scanning NetApp snapshot policies in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_netapp_orphan_snapshots(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for NetApp volumes with excessive old snapshots consuming storage.
+
+        Detects volumes that have accumulated many snapshots (>50) which consume
+        additional storage capacity and incur costs.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of volumes with excessive snapshots
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.netapp import NetAppManagementClient
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        max_snapshots = rules.get("max_snapshots", 50)
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            netapp_client = NetAppManagementClient(credential, self.subscription_id)
+
+            for account in netapp_client.accounts.list_by_subscription():
+                if account.location and account.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(account.id):
+                    continue
+
+                parts = account.id.split('/')
+                rg_idx = parts.index('resourceGroups')
+                rg_name = parts[rg_idx + 1]
+                account_name = account.name
+
+                for pool in netapp_client.pools.list(rg_name, account_name):
+                    pool_name = pool.name.split('/')[-1] if '/' in pool.name else pool.name
+                    service_level = pool.service_level or 'Standard'
+
+                    for volume in netapp_client.volumes.list(rg_name, account_name, pool_name):
+                        vol_name = volume.name.split('/')[-1] if '/' in volume.name else volume.name
+
+                        try:
+                            snapshots = list(netapp_client.snapshots.list(rg_name, account_name, pool_name, vol_name))
+                            snapshot_count = len(snapshots)
+
+                            if snapshot_count <= max_snapshots:
+                                continue
+
+                            quota_gib = (volume.usage_threshold or 0) / (1024 ** 3)
+                            monthly_cost = self._calculate_netapp_volume_cost(service_level, quota_gib)
+                            # Estimate snapshot overhead (~5% per 50 snapshots)
+                            snapshot_overhead = monthly_cost * (snapshot_count / 50) * 0.05
+
+                            metadata = {
+                                'volume_name': vol_name,
+                                'volume_id': volume.id,
+                                'pool_name': pool_name,
+                                'service_level': service_level,
+                                'snapshot_count': snapshot_count,
+                                'max_snapshots_threshold': max_snapshots,
+                                'estimated_snapshot_overhead': round(snapshot_overhead, 2),
+                                'orphan_reason': f"NetApp volume '{vol_name}' has {snapshot_count} snapshots (threshold: {max_snapshots})",
+                                'recommendation': f'Clean up old snapshots to reduce storage overhead (~${snapshot_overhead:.0f}/month)',
+                                'confidence_level': 'medium',
+                            }
+
+                            orphans.append(OrphanResourceData(
+                                resource_type='netapp_orphan_snapshots',
+                                resource_id=volume.id,
+                                resource_name=vol_name,
+                                region=region,
+                                estimated_monthly_cost=snapshot_overhead,
+                                resource_metadata=metadata
+                            ))
+                        except Exception:
+                            continue
+
+        except Exception as e:
+            print(f"Error scanning NetApp orphan snapshots in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_netapp_no_replication(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for NetApp volumes without cross-region replication configured.
+
+        Production volumes without replication lack disaster recovery capability.
+        This is a governance/risk finding rather than a cost optimization.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of volumes without replication
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.netapp import NetAppManagementClient
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        dev_keywords = ['dev', 'test', 'staging', 'sandbox', 'poc', 'demo', 'lab', 'trial', 'qa']
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            netapp_client = NetAppManagementClient(credential, self.subscription_id)
+
+            for account in netapp_client.accounts.list_by_subscription():
+                if account.location and account.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(account.id):
+                    continue
+
+                parts = account.id.split('/')
+                rg_idx = parts.index('resourceGroups')
+                rg_name = parts[rg_idx + 1]
+                account_name = account.name
+
+                # Skip dev environments
+                name_lower = account_name.lower()
+                rg_lower = rg_name.lower()
+                tags = account.tags or {}
+                env_tag = tags.get('environment', tags.get('env', '')).lower()
+                is_dev = (
+                    any(kw in name_lower for kw in dev_keywords)
+                    or any(kw in rg_lower for kw in dev_keywords)
+                    or any(kw in env_tag for kw in dev_keywords)
+                )
+                if is_dev:
+                    continue
+
+                for pool in netapp_client.pools.list(rg_name, account_name):
+                    pool_name = pool.name.split('/')[-1] if '/' in pool.name else pool.name
+                    service_level = pool.service_level or 'Standard'
+
+                    for volume in netapp_client.volumes.list(rg_name, account_name, pool_name):
+                        vol_name = volume.name.split('/')[-1] if '/' in volume.name else volume.name
+
+                        # Check replication
+                        has_replication = False
+                        if hasattr(volume, 'data_protection') and volume.data_protection:
+                            if hasattr(volume.data_protection, 'replication') and volume.data_protection.replication:
+                                has_replication = True
+
+                        if has_replication:
+                            continue
+
+                        quota_gib = (volume.usage_threshold or 0) / (1024 ** 3)
+                        monthly_cost = self._calculate_netapp_volume_cost(service_level, quota_gib)
+
+                        metadata = {
+                            'volume_name': vol_name,
+                            'volume_id': volume.id,
+                            'pool_name': pool_name,
+                            'service_level': service_level,
+                            'quota_gib': round(quota_gib, 2),
+                            'orphan_reason': f"Production NetApp volume '{vol_name}' has no cross-region replication",
+                            'recommendation': 'Configure cross-region replication for disaster recovery',
+                            'confidence_level': 'medium',
+                        }
+
+                        orphans.append(OrphanResourceData(
+                            resource_type='netapp_no_replication',
+                            resource_id=volume.id,
+                            resource_name=vol_name,
+                            region=region,
+                            estimated_monthly_cost=monthly_cost,
+                            resource_metadata=metadata
+                        ))
+
+        except Exception as e:
+            print(f"Error scanning NetApp replication in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_netapp_old_snapshots(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for NetApp volumes with snapshots older than 90 days.
+
+        Old snapshots consume storage and are unlikely to be useful for recovery.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of volumes with old snapshots
+        """
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.netapp import NetAppManagementClient
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        max_age_days = rules.get("max_snapshot_age_days", 90)
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            netapp_client = NetAppManagementClient(credential, self.subscription_id)
+            now = datetime.now(timezone.utc)
+
+            for account in netapp_client.accounts.list_by_subscription():
+                if account.location and account.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(account.id):
+                    continue
+
+                parts = account.id.split('/')
+                rg_idx = parts.index('resourceGroups')
+                rg_name = parts[rg_idx + 1]
+                account_name = account.name
+
+                for pool in netapp_client.pools.list(rg_name, account_name):
+                    pool_name = pool.name.split('/')[-1] if '/' in pool.name else pool.name
+                    service_level = pool.service_level or 'Standard'
+
+                    for volume in netapp_client.volumes.list(rg_name, account_name, pool_name):
+                        vol_name = volume.name.split('/')[-1] if '/' in volume.name else volume.name
+
+                        try:
+                            snapshots = list(netapp_client.snapshots.list(rg_name, account_name, pool_name, vol_name))
+                            old_snapshots = []
+                            for snap in snapshots:
+                                if hasattr(snap, 'created') and snap.created:
+                                    age = (now - snap.created).days
+                                    if age > max_age_days:
+                                        old_snapshots.append({
+                                            'name': snap.name.split('/')[-1] if '/' in snap.name else snap.name,
+                                            'age_days': age,
+                                        })
+
+                            if not old_snapshots:
+                                continue
+
+                            quota_gib = (volume.usage_threshold or 0) / (1024 ** 3)
+                            monthly_cost = self._calculate_netapp_volume_cost(service_level, quota_gib)
+                            snapshot_overhead = monthly_cost * len(old_snapshots) * 0.02
+
+                            metadata = {
+                                'volume_name': vol_name,
+                                'volume_id': volume.id,
+                                'pool_name': pool_name,
+                                'service_level': service_level,
+                                'old_snapshot_count': len(old_snapshots),
+                                'max_age_days_threshold': max_age_days,
+                                'oldest_snapshot_age': max(s['age_days'] for s in old_snapshots),
+                                'old_snapshots': old_snapshots[:10],
+                                'orphan_reason': f"NetApp volume '{vol_name}' has {len(old_snapshots)} snapshots older than {max_age_days} days",
+                                'recommendation': f'Delete old snapshots to reclaim storage (~${snapshot_overhead:.0f}/month)',
+                                'confidence_level': 'high',
+                            }
+
+                            orphans.append(OrphanResourceData(
+                                resource_type='netapp_old_snapshots',
+                                resource_id=volume.id,
+                                resource_name=vol_name,
+                                region=region,
+                                estimated_monthly_cost=snapshot_overhead,
+                                resource_metadata=metadata
+                            ))
+                        except Exception:
+                            continue
+
+        except Exception as e:
+            print(f"Error scanning NetApp old snapshots in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_netapp_empty_capacity_pool(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for NetApp capacity pools with no volumes.
+
+        Empty pools still incur the full capacity pool cost based on their
+        provisioned size and service level.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of empty capacity pools
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.netapp import NetAppManagementClient
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            netapp_client = NetAppManagementClient(credential, self.subscription_id)
+
+            for account in netapp_client.accounts.list_by_subscription():
+                if account.location and account.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(account.id):
+                    continue
+
+                parts = account.id.split('/')
+                rg_idx = parts.index('resourceGroups')
+                rg_name = parts[rg_idx + 1]
+                account_name = account.name
+
+                for pool in netapp_client.pools.list(rg_name, account_name):
+                    pool_name = pool.name.split('/')[-1] if '/' in pool.name else pool.name
+
+                    try:
+                        volumes = list(netapp_client.volumes.list(rg_name, account_name, pool_name))
+                        if len(volumes) > 0:
+                            continue
+                    except Exception:
+                        continue
+
+                    service_level = pool.service_level or 'Standard'
+                    size_tib = (pool.size or 0) / (1024 ** 4)
+                    monthly_cost = self._calculate_netapp_pool_cost(service_level, size_tib)
+
+                    metadata = {
+                        'pool_name': pool_name,
+                        'pool_id': pool.id,
+                        'account_name': account_name,
+                        'service_level': service_level,
+                        'size_tib': round(size_tib, 2),
+                        'volume_count': 0,
+                        'orphan_reason': f"NetApp capacity pool '{pool_name}' has no volumes but costs ${monthly_cost:.0f}/month",
+                        'recommendation': 'Delete empty capacity pool to stop incurring charges',
+                        'confidence_level': 'critical',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='netapp_empty_capacity_pool',
+                        resource_id=pool.id,
+                        resource_name=pool_name,
+                        region=region,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata=metadata
+                    ))
+
+        except Exception as e:
+            print(f"Error scanning empty NetApp pools in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_netapp_pool_over_provisioned(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for NetApp capacity pools where total volume quotas use < 30% of pool size.
+
+        Detects pools that are significantly larger than needed for their volumes.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of over-provisioned capacity pools
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.netapp import NetAppManagementClient
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        usage_threshold_pct = rules.get("usage_threshold_pct", 30)
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            netapp_client = NetAppManagementClient(credential, self.subscription_id)
+
+            for account in netapp_client.accounts.list_by_subscription():
+                if account.location and account.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(account.id):
+                    continue
+
+                parts = account.id.split('/')
+                rg_idx = parts.index('resourceGroups')
+                rg_name = parts[rg_idx + 1]
+                account_name = account.name
+
+                for pool in netapp_client.pools.list(rg_name, account_name):
+                    pool_name = pool.name.split('/')[-1] if '/' in pool.name else pool.name
+                    pool_size = pool.size or 0
+                    if pool_size == 0:
+                        continue
+
+                    try:
+                        volumes = list(netapp_client.volumes.list(rg_name, account_name, pool_name))
+                        if not volumes:
+                            continue  # Handled by empty_capacity_pool scanner
+
+                        total_quota = sum(v.usage_threshold or 0 for v in volumes)
+                        usage_pct = (total_quota / pool_size) * 100
+
+                        if usage_pct >= usage_threshold_pct:
+                            continue
+
+                        service_level = pool.service_level or 'Standard'
+                        size_tib = pool_size / (1024 ** 4)
+                        monthly_cost = self._calculate_netapp_pool_cost(service_level, size_tib)
+                        right_size_tib = max((total_quota / (1024 ** 4)) * 1.5, 4)  # 50% headroom, min 4 TiB
+                        right_cost = self._calculate_netapp_pool_cost(service_level, right_size_tib)
+                        savings = monthly_cost - right_cost
+
+                        metadata = {
+                            'pool_name': pool_name,
+                            'pool_id': pool.id,
+                            'account_name': account_name,
+                            'service_level': service_level,
+                            'pool_size_tib': round(size_tib, 2),
+                            'total_volume_quota_tib': round(total_quota / (1024 ** 4), 2),
+                            'usage_pct': round(usage_pct, 1),
+                            'volume_count': len(volumes),
+                            'recommended_size_tib': round(right_size_tib, 2),
+                            'potential_savings': round(savings, 2),
+                            'orphan_reason': f"NetApp pool '{pool_name}' volume quotas use {usage_pct:.1f}% of {size_tib:.1f} TiB pool",
+                            'recommendation': f'Resize pool to {right_size_tib:.1f} TiB to save ~${savings:.0f}/month',
+                            'confidence_level': 'high' if usage_pct < 15 else 'medium',
+                        }
+
+                        orphans.append(OrphanResourceData(
+                            resource_type='netapp_pool_over_provisioned',
+                            resource_id=pool.id,
+                            resource_name=pool_name,
+                            region=region,
+                            estimated_monthly_cost=monthly_cost,
+                            resource_metadata=metadata
+                        ))
+                    except Exception:
+                        continue
+
+        except Exception as e:
+            print(f"Error scanning over-provisioned NetApp pools in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_netapp_multiple_pools_consolidation(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for NetApp accounts with multiple pools of the same service level.
+
+        Multiple pools at the same tier in the same account can often be
+        consolidated into a single larger pool to simplify management.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of accounts with consolidation opportunities
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.netapp import NetAppManagementClient
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            netapp_client = NetAppManagementClient(credential, self.subscription_id)
+
+            for account in netapp_client.accounts.list_by_subscription():
+                if account.location and account.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(account.id):
+                    continue
+
+                parts = account.id.split('/')
+                rg_idx = parts.index('resourceGroups')
+                rg_name = parts[rg_idx + 1]
+                account_name = account.name
+
+                pools = list(netapp_client.pools.list(rg_name, account_name))
+                if len(pools) < 2:
+                    continue
+
+                # Group pools by service level
+                pools_by_tier: dict[str, list] = {}
+                for pool in pools:
+                    tier = (pool.service_level or 'Standard').upper()
+                    pools_by_tier.setdefault(tier, []).append(pool)
+
+                for tier, tier_pools in pools_by_tier.items():
+                    if len(tier_pools) < 2:
+                        continue
+
+                    total_size_tib = sum((p.size or 0) / (1024 ** 4) for p in tier_pools)
+                    total_cost = self._calculate_netapp_pool_cost(tier, total_size_tib)
+                    pool_names = [p.name.split('/')[-1] if '/' in p.name else p.name for p in tier_pools]
+
+                    metadata = {
+                        'account_name': account_name,
+                        'account_id': account.id,
+                        'service_level': tier,
+                        'pool_count': len(tier_pools),
+                        'pool_names': pool_names,
+                        'total_size_tib': round(total_size_tib, 2),
+                        'total_cost': round(total_cost, 2),
+                        'orphan_reason': f"Account '{account_name}' has {len(tier_pools)} {tier} pools that could be consolidated",
+                        'recommendation': f'Consolidate {len(tier_pools)} {tier} pools into a single pool for simpler management',
+                        'confidence_level': 'medium',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='netapp_multiple_pools_consolidation',
+                        resource_id=account.id,
+                        resource_name=account_name,
+                        region=region,
+                        estimated_monthly_cost=total_cost,
+                        resource_metadata=metadata
+                    ))
+
+        except Exception as e:
+            print(f"Error scanning NetApp pool consolidation in {region}: {str(e)}")
+
+        return orphans
+
+    # Phase 2 - NetApp Files Metrics-based detection (8 scenarios)
+
+    async def scan_netapp_low_iops(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for NetApp volumes with very low IOPS (< 10 avg over 7 days).
+
+        Low IOPS indicates the volume is barely used and could be downsized
+        to a lower service level or deleted.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of low-IOPS NetApp volumes
+        """
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.netapp import NetAppManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        iops_threshold = rules.get("iops_threshold", 10)
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            netapp_client = NetAppManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=7)
+
+            for account in netapp_client.accounts.list_by_subscription():
+                if account.location and account.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(account.id):
+                    continue
+
+                parts = account.id.split('/')
+                rg_idx = parts.index('resourceGroups')
+                rg_name = parts[rg_idx + 1]
+                account_name = account.name
+
+                for pool in netapp_client.pools.list(rg_name, account_name):
+                    pool_name = pool.name.split('/')[-1] if '/' in pool.name else pool.name
+                    service_level = pool.service_level or 'Standard'
+
+                    for volume in netapp_client.volumes.list(rg_name, account_name, pool_name):
+                        vol_name = volume.name.split('/')[-1] if '/' in volume.name else volume.name
+
+                        try:
+                            response = metrics_client.query_resource(
+                                volume.id,
+                                metric_names=["ReadIops", "WriteIops"],
+                                timespan=(start_time, end_time),
+                                granularity=timedelta(days=1),
+                                aggregations=[MetricAggregationType.AVERAGE]
+                            )
+
+                            total_iops = 0
+                            data_points = 0
+                            for metric in response.metrics:
+                                for ts in metric.timeseries:
+                                    for dp in ts.data:
+                                        if dp.average is not None:
+                                            total_iops += dp.average
+                                            data_points += 1
+
+                            avg_iops = total_iops / max(data_points, 1)
+                            if avg_iops >= iops_threshold:
+                                continue
+
+                            quota_gib = (volume.usage_threshold or 0) / (1024 ** 3)
+                            monthly_cost = self._calculate_netapp_volume_cost(service_level, quota_gib)
+                            downgrade = self._get_netapp_recommended_downgrade(service_level)
+
+                            metadata = {
+                                'volume_name': vol_name,
+                                'volume_id': volume.id,
+                                'pool_name': pool_name,
+                                'service_level': service_level,
+                                'quota_gib': round(quota_gib, 2),
+                                'avg_iops': round(avg_iops, 2),
+                                'iops_threshold': iops_threshold,
+                                'orphan_reason': f"NetApp volume '{vol_name}' has avg {avg_iops:.1f} IOPS (threshold: {iops_threshold})",
+                                'recommendation': f'Downgrade to {downgrade} tier or delete volume' if downgrade else 'Delete volume if no longer needed',
+                                'confidence_level': 'high' if avg_iops < 1 else 'medium',
+                            }
+
+                            orphans.append(OrphanResourceData(
+                                resource_type='netapp_low_iops',
+                                resource_id=volume.id,
+                                resource_name=vol_name,
+                                region=region,
+                                estimated_monthly_cost=monthly_cost,
+                                resource_metadata=metadata
+                            ))
+                        except Exception:
+                            continue
+
+        except Exception as e:
+            print(f"Error scanning low IOPS NetApp volumes in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_netapp_low_throughput(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for NetApp volumes with low throughput (< 1 MiB/s avg over 7 days).
+
+        Low throughput on Premium/Ultra volumes indicates the expensive service
+        level is not being utilized.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of low-throughput NetApp volumes
+        """
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.netapp import NetAppManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        throughput_threshold_bytes = rules.get("throughput_threshold_bytes_per_sec", 1 * 1024 * 1024)  # 1 MiB/s
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            netapp_client = NetAppManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=7)
+
+            for account in netapp_client.accounts.list_by_subscription():
+                if account.location and account.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(account.id):
+                    continue
+
+                parts = account.id.split('/')
+                rg_idx = parts.index('resourceGroups')
+                rg_name = parts[rg_idx + 1]
+                account_name = account.name
+
+                for pool in netapp_client.pools.list(rg_name, account_name):
+                    pool_name = pool.name.split('/')[-1] if '/' in pool.name else pool.name
+                    service_level = pool.service_level or 'Standard'
+
+                    for volume in netapp_client.volumes.list(rg_name, account_name, pool_name):
+                        vol_name = volume.name.split('/')[-1] if '/' in volume.name else volume.name
+
+                        try:
+                            response = metrics_client.query_resource(
+                                volume.id,
+                                metric_names=["ReadThroughput", "WriteThroughput"],
+                                timespan=(start_time, end_time),
+                                granularity=timedelta(days=1),
+                                aggregations=[MetricAggregationType.AVERAGE]
+                            )
+
+                            total_throughput = 0
+                            data_points = 0
+                            for metric in response.metrics:
+                                for ts in metric.timeseries:
+                                    for dp in ts.data:
+                                        if dp.average is not None:
+                                            total_throughput += dp.average
+                                            data_points += 1
+
+                            avg_throughput = total_throughput / max(data_points, 1)
+                            if avg_throughput >= throughput_threshold_bytes:
+                                continue
+
+                            quota_gib = (volume.usage_threshold or 0) / (1024 ** 3)
+                            monthly_cost = self._calculate_netapp_volume_cost(service_level, quota_gib)
+                            downgrade = self._get_netapp_recommended_downgrade(service_level)
+                            avg_throughput_mib = avg_throughput / (1024 * 1024)
+
+                            metadata = {
+                                'volume_name': vol_name,
+                                'volume_id': volume.id,
+                                'pool_name': pool_name,
+                                'service_level': service_level,
+                                'quota_gib': round(quota_gib, 2),
+                                'avg_throughput_mib_per_sec': round(avg_throughput_mib, 3),
+                                'threshold_mib_per_sec': round(throughput_threshold_bytes / (1024 * 1024), 1),
+                                'orphan_reason': f"NetApp volume '{vol_name}' has avg {avg_throughput_mib:.3f} MiB/s throughput",
+                                'recommendation': f'Downgrade to {downgrade} tier' if downgrade else 'Consider deleting volume',
+                                'confidence_level': 'high' if avg_throughput_mib < 0.01 else 'medium',
+                            }
+
+                            orphans.append(OrphanResourceData(
+                                resource_type='netapp_low_throughput',
+                                resource_id=volume.id,
+                                resource_name=vol_name,
+                                region=region,
+                                estimated_monthly_cost=monthly_cost,
+                                resource_metadata=metadata
+                            ))
+                        except Exception:
+                            continue
+
+        except Exception as e:
+            print(f"Error scanning low throughput NetApp volumes in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_netapp_low_read_ops(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for NetApp volumes with near-zero read operations.
+
+        Volumes with < 5 read IOPS on average may be write-only (logs/archives)
+        and could use a cheaper storage tier.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of low read-ops NetApp volumes
+        """
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.netapp import NetAppManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        read_threshold = rules.get("read_iops_threshold", 5)
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            netapp_client = NetAppManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=7)
+
+            for account in netapp_client.accounts.list_by_subscription():
+                if account.location and account.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(account.id):
+                    continue
+
+                parts = account.id.split('/')
+                rg_idx = parts.index('resourceGroups')
+                rg_name = parts[rg_idx + 1]
+                account_name = account.name
+
+                for pool in netapp_client.pools.list(rg_name, account_name):
+                    pool_name = pool.name.split('/')[-1] if '/' in pool.name else pool.name
+                    service_level = pool.service_level or 'Standard'
+
+                    for volume in netapp_client.volumes.list(rg_name, account_name, pool_name):
+                        vol_name = volume.name.split('/')[-1] if '/' in volume.name else volume.name
+
+                        try:
+                            response = metrics_client.query_resource(
+                                volume.id,
+                                metric_names=["ReadIops"],
+                                timespan=(start_time, end_time),
+                                granularity=timedelta(days=1),
+                                aggregations=[MetricAggregationType.AVERAGE]
+                            )
+
+                            total_read = 0
+                            data_points = 0
+                            for metric in response.metrics:
+                                for ts in metric.timeseries:
+                                    for dp in ts.data:
+                                        if dp.average is not None:
+                                            total_read += dp.average
+                                            data_points += 1
+
+                            avg_read = total_read / max(data_points, 1)
+                            if avg_read >= read_threshold:
+                                continue
+
+                            quota_gib = (volume.usage_threshold or 0) / (1024 ** 3)
+                            monthly_cost = self._calculate_netapp_volume_cost(service_level, quota_gib)
+
+                            metadata = {
+                                'volume_name': vol_name,
+                                'volume_id': volume.id,
+                                'pool_name': pool_name,
+                                'service_level': service_level,
+                                'quota_gib': round(quota_gib, 2),
+                                'avg_read_iops': round(avg_read, 2),
+                                'read_threshold': read_threshold,
+                                'orphan_reason': f"NetApp volume '{vol_name}' has avg {avg_read:.1f} read IOPS (write-only pattern)",
+                                'recommendation': 'Move to Standard tier or migrate to Azure Blob for archive/write-only workloads',
+                                'confidence_level': 'medium',
+                            }
+
+                            orphans.append(OrphanResourceData(
+                                resource_type='netapp_low_read_ops',
+                                resource_id=volume.id,
+                                resource_name=vol_name,
+                                region=region,
+                                estimated_monthly_cost=monthly_cost,
+                                resource_metadata=metadata
+                            ))
+                        except Exception:
+                            continue
+
+        except Exception as e:
+            print(f"Error scanning low read ops NetApp volumes in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_netapp_low_write_ops(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for NetApp volumes with near-zero write operations.
+
+        Volumes with < 5 write IOPS on average may be read-only and could
+        use a snapshot or read replica instead.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of low write-ops NetApp volumes
+        """
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.netapp import NetAppManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        write_threshold = rules.get("write_iops_threshold", 5)
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            netapp_client = NetAppManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=7)
+
+            for account in netapp_client.accounts.list_by_subscription():
+                if account.location and account.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(account.id):
+                    continue
+
+                parts = account.id.split('/')
+                rg_idx = parts.index('resourceGroups')
+                rg_name = parts[rg_idx + 1]
+                account_name = account.name
+
+                for pool in netapp_client.pools.list(rg_name, account_name):
+                    pool_name = pool.name.split('/')[-1] if '/' in pool.name else pool.name
+                    service_level = pool.service_level or 'Standard'
+
+                    for volume in netapp_client.volumes.list(rg_name, account_name, pool_name):
+                        vol_name = volume.name.split('/')[-1] if '/' in volume.name else volume.name
+
+                        try:
+                            response = metrics_client.query_resource(
+                                volume.id,
+                                metric_names=["WriteIops"],
+                                timespan=(start_time, end_time),
+                                granularity=timedelta(days=1),
+                                aggregations=[MetricAggregationType.AVERAGE]
+                            )
+
+                            total_write = 0
+                            data_points = 0
+                            for metric in response.metrics:
+                                for ts in metric.timeseries:
+                                    for dp in ts.data:
+                                        if dp.average is not None:
+                                            total_write += dp.average
+                                            data_points += 1
+
+                            avg_write = total_write / max(data_points, 1)
+                            if avg_write >= write_threshold:
+                                continue
+
+                            quota_gib = (volume.usage_threshold or 0) / (1024 ** 3)
+                            monthly_cost = self._calculate_netapp_volume_cost(service_level, quota_gib)
+
+                            metadata = {
+                                'volume_name': vol_name,
+                                'volume_id': volume.id,
+                                'pool_name': pool_name,
+                                'service_level': service_level,
+                                'quota_gib': round(quota_gib, 2),
+                                'avg_write_iops': round(avg_write, 2),
+                                'write_threshold': write_threshold,
+                                'orphan_reason': f"NetApp volume '{vol_name}' has avg {avg_write:.1f} write IOPS (read-only pattern)",
+                                'recommendation': 'Consider using a snapshot-based read replica or Standard tier',
+                                'confidence_level': 'medium',
+                            }
+
+                            orphans.append(OrphanResourceData(
+                                resource_type='netapp_low_write_ops',
+                                resource_id=volume.id,
+                                resource_name=vol_name,
+                                region=region,
+                                estimated_monthly_cost=monthly_cost,
+                                resource_metadata=metadata
+                            ))
+                        except Exception:
+                            continue
+
+        except Exception as e:
+            print(f"Error scanning low write ops NetApp volumes in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_netapp_high_latency(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for NetApp volumes with high average latency (> 10ms).
+
+        High latency on Premium/Ultra volumes may indicate misconfiguration
+        or workload mismatch rather than a need for the expensive tier.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of high-latency NetApp volumes
+        """
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.netapp import NetAppManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        latency_threshold_ms = rules.get("latency_threshold_ms", 10)
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            netapp_client = NetAppManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=7)
+
+            for account in netapp_client.accounts.list_by_subscription():
+                if account.location and account.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(account.id):
+                    continue
+
+                parts = account.id.split('/')
+                rg_idx = parts.index('resourceGroups')
+                rg_name = parts[rg_idx + 1]
+                account_name = account.name
+
+                for pool in netapp_client.pools.list(rg_name, account_name):
+                    pool_name = pool.name.split('/')[-1] if '/' in pool.name else pool.name
+                    service_level = pool.service_level or 'Standard'
+
+                    # Only flag Premium/Ultra - latency on Standard is expected
+                    if not self._is_netapp_premium_tier(service_level):
+                        continue
+
+                    for volume in netapp_client.volumes.list(rg_name, account_name, pool_name):
+                        vol_name = volume.name.split('/')[-1] if '/' in volume.name else volume.name
+
+                        try:
+                            response = metrics_client.query_resource(
+                                volume.id,
+                                metric_names=["AverageReadLatency", "AverageWriteLatency"],
+                                timespan=(start_time, end_time),
+                                granularity=timedelta(days=1),
+                                aggregations=[MetricAggregationType.AVERAGE]
+                            )
+
+                            total_latency = 0
+                            data_points = 0
+                            for metric in response.metrics:
+                                for ts in metric.timeseries:
+                                    for dp in ts.data:
+                                        if dp.average is not None:
+                                            total_latency += dp.average
+                                            data_points += 1
+
+                            avg_latency = total_latency / max(data_points, 1)
+                            if avg_latency <= latency_threshold_ms:
+                                continue
+
+                            quota_gib = (volume.usage_threshold or 0) / (1024 ** 3)
+                            monthly_cost = self._calculate_netapp_volume_cost(service_level, quota_gib)
+                            downgrade = self._get_netapp_recommended_downgrade(service_level)
+
+                            metadata = {
+                                'volume_name': vol_name,
+                                'volume_id': volume.id,
+                                'pool_name': pool_name,
+                                'service_level': service_level,
+                                'quota_gib': round(quota_gib, 2),
+                                'avg_latency_ms': round(avg_latency, 2),
+                                'latency_threshold_ms': latency_threshold_ms,
+                                'orphan_reason': f"NetApp {service_level} volume '{vol_name}' has {avg_latency:.1f}ms avg latency (not benefiting from premium tier)",
+                                'recommendation': f'Investigate latency cause; consider downgrade to {downgrade}' if downgrade else 'Investigate latency root cause',
+                                'confidence_level': 'medium',
+                            }
+
+                            orphans.append(OrphanResourceData(
+                                resource_type='netapp_high_latency',
+                                resource_id=volume.id,
+                                resource_name=vol_name,
+                                region=region,
+                                estimated_monthly_cost=monthly_cost,
+                                resource_metadata=metadata
+                            ))
+                        except Exception:
+                            continue
+
+        except Exception as e:
+            print(f"Error scanning high latency NetApp volumes in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_netapp_low_volume_allocated(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for NetApp volumes where allocated size is < 10% of quota.
+
+        VolumeAllocatedSize tracks actual data footprint. A volume with very
+        low allocation relative to quota is wasting reserved capacity.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of under-allocated NetApp volumes
+        """
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.netapp import NetAppManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        alloc_threshold_pct = rules.get("allocation_threshold_pct", 10)
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            netapp_client = NetAppManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=7)
+
+            for account in netapp_client.accounts.list_by_subscription():
+                if account.location and account.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(account.id):
+                    continue
+
+                parts = account.id.split('/')
+                rg_idx = parts.index('resourceGroups')
+                rg_name = parts[rg_idx + 1]
+                account_name = account.name
+
+                for pool in netapp_client.pools.list(rg_name, account_name):
+                    pool_name = pool.name.split('/')[-1] if '/' in pool.name else pool.name
+                    service_level = pool.service_level or 'Standard'
+
+                    for volume in netapp_client.volumes.list(rg_name, account_name, pool_name):
+                        vol_name = volume.name.split('/')[-1] if '/' in volume.name else volume.name
+                        quota_bytes = volume.usage_threshold or 0
+                        if quota_bytes == 0:
+                            continue
+
+                        try:
+                            response = metrics_client.query_resource(
+                                volume.id,
+                                metric_names=["VolumeAllocatedSize"],
+                                timespan=(start_time, end_time),
+                                granularity=timedelta(days=1),
+                                aggregations=[MetricAggregationType.AVERAGE]
+                            )
+
+                            max_alloc = 0
+                            for metric in response.metrics:
+                                for ts in metric.timeseries:
+                                    for dp in ts.data:
+                                        if dp.average and dp.average > max_alloc:
+                                            max_alloc = dp.average
+
+                            alloc_pct = (max_alloc / quota_bytes) * 100
+                            if alloc_pct >= alloc_threshold_pct:
+                                continue
+
+                            quota_gib = quota_bytes / (1024 ** 3)
+                            alloc_gib = max_alloc / (1024 ** 3)
+                            monthly_cost = self._calculate_netapp_volume_cost(service_level, quota_gib)
+                            right_gib = max(alloc_gib * 3, 100)
+                            right_cost = self._calculate_netapp_volume_cost(service_level, right_gib)
+                            savings = monthly_cost - right_cost
+
+                            metadata = {
+                                'volume_name': vol_name,
+                                'volume_id': volume.id,
+                                'pool_name': pool_name,
+                                'service_level': service_level,
+                                'quota_gib': round(quota_gib, 2),
+                                'allocated_gib': round(alloc_gib, 2),
+                                'allocation_pct': round(alloc_pct, 1),
+                                'threshold_pct': alloc_threshold_pct,
+                                'recommended_gib': round(right_gib, 2),
+                                'potential_savings': round(savings, 2),
+                                'orphan_reason': f"NetApp volume '{vol_name}' allocated {alloc_pct:.1f}% of {quota_gib:.0f} GiB quota",
+                                'recommendation': f'Resize volume to {right_gib:.0f} GiB to save ~${savings:.0f}/month',
+                                'confidence_level': 'high' if alloc_pct < 5 else 'medium',
+                            }
+
+                            orphans.append(OrphanResourceData(
+                                resource_type='netapp_low_volume_allocated',
+                                resource_id=volume.id,
+                                resource_name=vol_name,
+                                region=region,
+                                estimated_monthly_cost=monthly_cost,
+                                resource_metadata=metadata
+                            ))
+                        except Exception:
+                            continue
+
+        except Exception as e:
+            print(f"Error scanning low allocation NetApp volumes in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_netapp_low_snapshot_usage(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for NetApp volumes with snapshot policies but near-zero snapshot consumed size.
+
+        Volumes that have snapshot policies configured but snapshots consume
+        almost no space may have misconfigured or unnecessary snapshot policies.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of volumes with low snapshot usage
+        """
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.netapp import NetAppManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            netapp_client = NetAppManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=7)
+
+            for account in netapp_client.accounts.list_by_subscription():
+                if account.location and account.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(account.id):
+                    continue
+
+                parts = account.id.split('/')
+                rg_idx = parts.index('resourceGroups')
+                rg_name = parts[rg_idx + 1]
+                account_name = account.name
+
+                for pool in netapp_client.pools.list(rg_name, account_name):
+                    pool_name = pool.name.split('/')[-1] if '/' in pool.name else pool.name
+                    service_level = pool.service_level or 'Standard'
+
+                    for volume in netapp_client.volumes.list(rg_name, account_name, pool_name):
+                        vol_name = volume.name.split('/')[-1] if '/' in volume.name else volume.name
+
+                        # Only check volumes with snapshot policies
+                        has_policy = False
+                        if hasattr(volume, 'data_protection') and volume.data_protection:
+                            if hasattr(volume.data_protection, 'snapshot') and volume.data_protection.snapshot:
+                                if volume.data_protection.snapshot.snapshot_policy_id:
+                                    has_policy = True
+                        if not has_policy:
+                            continue
+
+                        try:
+                            response = metrics_client.query_resource(
+                                volume.id,
+                                metric_names=["VolumeSnapshotSize"],
+                                timespan=(start_time, end_time),
+                                granularity=timedelta(days=1),
+                                aggregations=[MetricAggregationType.AVERAGE]
+                            )
+
+                            max_snap_size = 0
+                            for metric in response.metrics:
+                                for ts in metric.timeseries:
+                                    for dp in ts.data:
+                                        if dp.average and dp.average > max_snap_size:
+                                            max_snap_size = dp.average
+
+                            snap_size_mib = max_snap_size / (1024 * 1024)
+                            # If snapshots consume < 1 MiB, they're essentially empty
+                            if snap_size_mib >= 1:
+                                continue
+
+                            quota_gib = (volume.usage_threshold or 0) / (1024 ** 3)
+                            monthly_cost = self._calculate_netapp_volume_cost(service_level, quota_gib)
+
+                            metadata = {
+                                'volume_name': vol_name,
+                                'volume_id': volume.id,
+                                'pool_name': pool_name,
+                                'service_level': service_level,
+                                'quota_gib': round(quota_gib, 2),
+                                'snapshot_size_mib': round(snap_size_mib, 3),
+                                'has_snapshot_policy': True,
+                                'orphan_reason': f"NetApp volume '{vol_name}' has snapshot policy but snapshots consume {snap_size_mib:.3f} MiB",
+                                'recommendation': 'Review snapshot policy - snapshots may not be capturing meaningful data',
+                                'confidence_level': 'low',
+                            }
+
+                            orphans.append(OrphanResourceData(
+                                resource_type='netapp_low_snapshot_usage',
+                                resource_id=volume.id,
+                                resource_name=vol_name,
+                                region=region,
+                                estimated_monthly_cost=monthly_cost,
+                                resource_metadata=metadata
+                            ))
+                        except Exception:
+                            continue
+
+        except Exception as e:
+            print(f"Error scanning low snapshot usage NetApp volumes in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_netapp_pool_low_utilization(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for NetApp capacity pools with low utilization via PoolAllocatedSize metric.
+
+        Uses Azure Monitor metrics to detect pools where the actual allocated
+        storage across all volumes is < 20% of pool capacity.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of under-utilized capacity pools
+        """
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.netapp import NetAppManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        util_threshold_pct = rules.get("utilization_threshold_pct", 20)
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            netapp_client = NetAppManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=7)
+
+            for account in netapp_client.accounts.list_by_subscription():
+                if account.location and account.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(account.id):
+                    continue
+
+                parts = account.id.split('/')
+                rg_idx = parts.index('resourceGroups')
+                rg_name = parts[rg_idx + 1]
+                account_name = account.name
+
+                for pool in netapp_client.pools.list(rg_name, account_name):
+                    pool_name = pool.name.split('/')[-1] if '/' in pool.name else pool.name
+                    pool_size = pool.size or 0
+                    if pool_size == 0:
+                        continue
+
+                    try:
+                        response = metrics_client.query_resource(
+                            pool.id,
+                            metric_names=["VolumePoolAllocatedUsed"],
+                            timespan=(start_time, end_time),
+                            granularity=timedelta(days=1),
+                            aggregations=[MetricAggregationType.AVERAGE]
+                        )
+
+                        max_used = 0
+                        for metric in response.metrics:
+                            for ts in metric.timeseries:
+                                for dp in ts.data:
+                                    if dp.average and dp.average > max_used:
+                                        max_used = dp.average
+
+                        util_pct = (max_used / pool_size) * 100
+                        if util_pct >= util_threshold_pct:
+                            continue
+
+                        service_level = pool.service_level or 'Standard'
+                        size_tib = pool_size / (1024 ** 4)
+                        monthly_cost = self._calculate_netapp_pool_cost(service_level, size_tib)
+                        used_tib = max_used / (1024 ** 4)
+                        right_tib = max(used_tib * 2, 4)  # 2x headroom, min 4 TiB
+                        right_cost = self._calculate_netapp_pool_cost(service_level, right_tib)
+                        savings = monthly_cost - right_cost
+
+                        metadata = {
+                            'pool_name': pool_name,
+                            'pool_id': pool.id,
+                            'account_name': account_name,
+                            'service_level': service_level,
+                            'pool_size_tib': round(size_tib, 2),
+                            'used_tib': round(used_tib, 2),
+                            'utilization_pct': round(util_pct, 1),
+                            'threshold_pct': util_threshold_pct,
+                            'recommended_tib': round(right_tib, 2),
+                            'potential_savings': round(savings, 2),
+                            'orphan_reason': f"NetApp pool '{pool_name}' utilization is {util_pct:.1f}% of {size_tib:.1f} TiB",
+                            'recommendation': f'Resize pool to {right_tib:.1f} TiB to save ~${savings:.0f}/month',
+                            'confidence_level': 'high' if util_pct < 10 else 'medium',
+                        }
+
+                        orphans.append(OrphanResourceData(
+                            resource_type='netapp_pool_low_utilization',
+                            resource_id=pool.id,
+                            resource_name=pool_name,
+                            region=region,
+                            estimated_monthly_cost=monthly_cost,
+                            resource_metadata=metadata
+                        ))
+                    except Exception:
+                        continue
+
+        except Exception as e:
+            print(f"Error scanning low utilization NetApp pools in {region}: {str(e)}")
+
+        return orphans
+
+    # ===== Azure Cognitive Search Scanners (18 scenarios) =====
+
+    # Phase 1 - Cognitive Search Property-based detection (10 scenarios)
+
+    async def scan_search_service_idle(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for idle Azure Cognitive Search services with zero queries for 30+ days.
+
+        Detects search services that have not received any search queries,
+        indicating the service is provisioned but unused.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of idle search services
+        """
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.search import SearchManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        idle_days = rules.get("idle_days", 30)
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            search_client = SearchManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=idle_days)
+
+            for svc in search_client.services.list_by_subscription():
+                if svc.location and svc.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(svc.id):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        svc.id,
+                        metric_names=["SearchQueriesPerSecond"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.TOTAL]
+                    )
+
+                    total_queries = 0
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.total and dp.total > 0:
+                                    total_queries += dp.total
+
+                    if total_queries > 0:
+                        continue
+
+                    sku_name = svc.sku.name if svc.sku else 'S1'
+                    replica_count = svc.replica_count or 1
+                    partition_count = svc.partition_count or 1
+                    monthly_cost = self._calculate_search_service_cost(sku_name, replica_count, partition_count)
+
+                    age_days = 0
+                    if hasattr(svc, 'system_data') and svc.system_data and svc.system_data.created_at:
+                        age_days = (end_time - svc.system_data.created_at).days
+
+                    metadata = {
+                        'service_name': svc.name,
+                        'service_id': svc.id,
+                        'sku': sku_name,
+                        'replicas': replica_count,
+                        'partitions': partition_count,
+                        'search_units': replica_count * partition_count,
+                        'idle_days': idle_days,
+                        'total_queries': 0,
+                        'orphan_reason': f"Cognitive Search '{svc.name}' has 0 queries for {idle_days}+ days",
+                        'recommendation': 'Delete service or investigate if still needed',
+                        'confidence_level': self._calculate_confidence_level(age_days, rules),
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='search_service_idle',
+                        resource_id=svc.id,
+                        resource_name=svc.name,
+                        region=region,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata=metadata
+                    ))
+                except Exception:
+                    continue
+
+        except Exception as e:
+            print(f"Error scanning idle search services in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_search_premium_in_dev(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for premium Cognitive Search services (S2+) in dev/test environments.
+
+        Detects expensive search tiers in non-production environments where
+        Basic or S1 would suffice.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of premium search services in dev environments
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.search import SearchManagementClient
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        dev_keywords = ['dev', 'test', 'staging', 'sandbox', 'poc', 'demo', 'lab', 'trial', 'qa']
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            search_client = SearchManagementClient(credential, self.subscription_id)
+
+            for svc in search_client.services.list_by_subscription():
+                if svc.location and svc.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(svc.id):
+                    continue
+
+                sku_name = svc.sku.name if svc.sku else 'S1'
+                if not self._is_search_premium_tier(sku_name):
+                    continue
+
+                name_lower = svc.name.lower()
+                parts = svc.id.split('/')
+                rg_idx = parts.index('resourceGroups')
+                rg_lower = parts[rg_idx + 1].lower()
+                tags = svc.tags or {}
+                env_tag = tags.get('environment', tags.get('env', '')).lower()
+
+                is_dev = (
+                    any(kw in name_lower for kw in dev_keywords)
+                    or any(kw in rg_lower for kw in dev_keywords)
+                    or any(kw in env_tag for kw in dev_keywords)
+                )
+                if not is_dev:
+                    continue
+
+                replica_count = svc.replica_count or 1
+                partition_count = svc.partition_count or 1
+                monthly_cost = self._calculate_search_service_cost(sku_name, replica_count, partition_count)
+                basic_cost = self._calculate_search_service_cost('Basic', 1, 1)
+                savings = monthly_cost - basic_cost
+
+                metadata = {
+                    'service_name': svc.name,
+                    'service_id': svc.id,
+                    'sku': sku_name,
+                    'replicas': replica_count,
+                    'partitions': partition_count,
+                    'environment': env_tag or 'detected from name/rg',
+                    'current_cost': round(monthly_cost, 2),
+                    'basic_cost': round(basic_cost, 2),
+                    'potential_savings': round(savings, 2),
+                    'orphan_reason': f"Cognitive Search '{svc.name}' uses {sku_name} tier in dev/test environment",
+                    'recommendation': f'Downgrade to Basic tier to save ~${savings:.0f}/month',
+                    'confidence_level': 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='search_premium_in_dev',
+                    resource_id=svc.id,
+                    resource_name=svc.name,
+                    region=region,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+
+        except Exception as e:
+            print(f"Error scanning premium search in dev in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_search_no_indexes(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Cognitive Search services with zero indexes.
+
+        A search service without indexes is completely unused and still
+        incurs the full service cost.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of search services with no indexes
+        """
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.search import SearchManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            search_client = SearchManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=1)
+
+            for svc in search_client.services.list_by_subscription():
+                if svc.location and svc.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(svc.id):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        svc.id,
+                        metric_names=["DocumentCount"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.MAXIMUM]
+                    )
+
+                    has_docs = False
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.maximum and dp.maximum > 0:
+                                    has_docs = True
+                                    break
+
+                    if has_docs:
+                        continue
+
+                    sku_name = svc.sku.name if svc.sku else 'S1'
+                    replica_count = svc.replica_count or 1
+                    partition_count = svc.partition_count or 1
+                    monthly_cost = self._calculate_search_service_cost(sku_name, replica_count, partition_count)
+
+                    metadata = {
+                        'service_name': svc.name,
+                        'service_id': svc.id,
+                        'sku': sku_name,
+                        'replicas': replica_count,
+                        'partitions': partition_count,
+                        'document_count': 0,
+                        'orphan_reason': f"Cognitive Search '{svc.name}' has no documents/indexes",
+                        'recommendation': 'Delete empty search service to stop incurring charges',
+                        'confidence_level': 'critical',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='search_no_indexes',
+                        resource_id=svc.id,
+                        resource_name=svc.name,
+                        region=region,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata=metadata
+                    ))
+                except Exception:
+                    continue
+
+        except Exception as e:
+            print(f"Error scanning empty search services in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_search_over_provisioned_replicas(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Cognitive Search services with excessive replicas for their query load.
+
+        Services with 3+ replicas but low query volume are over-provisioned
+        for high availability that isn't needed.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of over-provisioned search services
+        """
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.search import SearchManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        min_replicas_threshold = rules.get("min_replicas_threshold", 3)
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            search_client = SearchManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=7)
+
+            for svc in search_client.services.list_by_subscription():
+                if svc.location and svc.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(svc.id):
+                    continue
+
+                replica_count = svc.replica_count or 1
+                if replica_count < min_replicas_threshold:
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        svc.id,
+                        metric_names=["SearchQueriesPerSecond"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.AVERAGE]
+                    )
+
+                    max_qps = 0
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.average and dp.average > max_qps:
+                                    max_qps = dp.average
+
+                    # Low QPS doesn't justify multiple replicas
+                    # 1 replica handles ~15 QPS for S1
+                    if max_qps > 10:
+                        continue
+
+                    sku_name = svc.sku.name if svc.sku else 'S1'
+                    partition_count = svc.partition_count or 1
+                    monthly_cost = self._calculate_search_service_cost(sku_name, replica_count, partition_count)
+                    reduced_cost = self._calculate_search_service_cost(sku_name, 1, partition_count)
+                    savings = monthly_cost - reduced_cost
+
+                    metadata = {
+                        'service_name': svc.name,
+                        'service_id': svc.id,
+                        'sku': sku_name,
+                        'replicas': replica_count,
+                        'partitions': partition_count,
+                        'max_qps_7d': round(max_qps, 3),
+                        'current_cost': round(monthly_cost, 2),
+                        'reduced_cost': round(reduced_cost, 2),
+                        'potential_savings': round(savings, 2),
+                        'orphan_reason': f"Cognitive Search '{svc.name}' has {replica_count} replicas but max {max_qps:.2f} QPS",
+                        'recommendation': f'Reduce to 1 replica to save ~${savings:.0f}/month',
+                        'confidence_level': 'high',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='search_over_provisioned_replicas',
+                        resource_id=svc.id,
+                        resource_name=svc.name,
+                        region=region,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata=metadata
+                    ))
+                except Exception:
+                    continue
+
+        except Exception as e:
+            print(f"Error scanning over-provisioned search replicas in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_search_no_private_endpoint(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for premium Cognitive Search services (S2+) without private endpoints.
+
+        Premium search services handling sensitive data should use private
+        endpoints for secure access.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of search services without private endpoints
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.search import SearchManagementClient
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            search_client = SearchManagementClient(credential, self.subscription_id)
+
+            for svc in search_client.services.list_by_subscription():
+                if svc.location and svc.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(svc.id):
+                    continue
+
+                sku_name = svc.sku.name if svc.sku else 'S1'
+                if not self._is_search_premium_tier(sku_name):
+                    continue
+
+                # Check private endpoint connections
+                private_endpoints = svc.private_endpoint_connections or []
+                if len(private_endpoints) > 0:
+                    continue
+
+                # Check if public access is enabled
+                public_access = svc.public_network_access or 'enabled'
+                if public_access.lower() == 'disabled':
+                    continue
+
+                replica_count = svc.replica_count or 1
+                partition_count = svc.partition_count or 1
+                monthly_cost = self._calculate_search_service_cost(sku_name, replica_count, partition_count)
+
+                metadata = {
+                    'service_name': svc.name,
+                    'service_id': svc.id,
+                    'sku': sku_name,
+                    'replicas': replica_count,
+                    'partitions': partition_count,
+                    'public_access': public_access,
+                    'private_endpoints': 0,
+                    'orphan_reason': f"Cognitive Search '{svc.name}' ({sku_name}) has no private endpoint with public access enabled",
+                    'recommendation': 'Configure private endpoint and disable public access for security',
+                    'confidence_level': 'medium',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='search_no_private_endpoint',
+                    resource_id=svc.id,
+                    resource_name=svc.name,
+                    region=region,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+
+        except Exception as e:
+            print(f"Error scanning search private endpoints in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_search_old_api_version(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Cognitive Search services created with old API versions.
+
+        Old services may lack newer features (semantic search, vector search)
+        and could benefit from recreation with latest configuration.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of search services with old configurations
+        """
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.search import SearchManagementClient
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        max_age_days = rules.get("max_age_days", 730)  # 2 years
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            search_client = SearchManagementClient(credential, self.subscription_id)
+            now = datetime.now(timezone.utc)
+
+            for svc in search_client.services.list_by_subscription():
+                if svc.location and svc.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(svc.id):
+                    continue
+
+                age_days = 0
+                if hasattr(svc, 'system_data') and svc.system_data and svc.system_data.created_at:
+                    age_days = (now - svc.system_data.created_at).days
+
+                if age_days < max_age_days:
+                    continue
+
+                sku_name = svc.sku.name if svc.sku else 'S1'
+                replica_count = svc.replica_count or 1
+                partition_count = svc.partition_count or 1
+                monthly_cost = self._calculate_search_service_cost(sku_name, replica_count, partition_count)
+
+                metadata = {
+                    'service_name': svc.name,
+                    'service_id': svc.id,
+                    'sku': sku_name,
+                    'replicas': replica_count,
+                    'partitions': partition_count,
+                    'age_days': age_days,
+                    'age_years': round(age_days / 365, 1),
+                    'orphan_reason': f"Cognitive Search '{svc.name}' is {age_days} days old ({age_days // 365}+ years)",
+                    'recommendation': 'Review and recreate with latest features (semantic search, vector search)',
+                    'confidence_level': 'low',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='search_old_api_version',
+                    resource_id=svc.id,
+                    resource_name=svc.name,
+                    region=region,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+
+        except Exception as e:
+            print(f"Error scanning old search services in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_search_multiple_services_same_rg(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for multiple Cognitive Search services in the same resource group.
+
+        Multiple search services in the same RG may indicate consolidation
+        opportunities through index consolidation.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of resource groups with multiple search services
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.search import SearchManagementClient
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            search_client = SearchManagementClient(credential, self.subscription_id)
+
+            services_by_rg: dict[str, list] = {}
+            for svc in search_client.services.list_by_subscription():
+                if svc.location and svc.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(svc.id):
+                    continue
+
+                parts = svc.id.split('/')
+                rg_idx = parts.index('resourceGroups')
+                rg_name = parts[rg_idx + 1]
+                services_by_rg.setdefault(rg_name, []).append(svc)
+
+            for rg_name, services in services_by_rg.items():
+                if len(services) < 2:
+                    continue
+
+                total_cost = 0
+                svc_names = []
+                for svc in services:
+                    sku_name = svc.sku.name if svc.sku else 'S1'
+                    replicas = svc.replica_count or 1
+                    partitions = svc.partition_count or 1
+                    total_cost += self._calculate_search_service_cost(sku_name, replicas, partitions)
+                    svc_names.append(svc.name)
+
+                metadata = {
+                    'resource_group': rg_name,
+                    'service_count': len(services),
+                    'service_names': svc_names,
+                    'total_cost': round(total_cost, 2),
+                    'orphan_reason': f"Resource group '{rg_name}' has {len(services)} search services that may be consolidated",
+                    'recommendation': 'Consolidate indexes into fewer search services to reduce costs',
+                    'confidence_level': 'medium',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='search_multiple_services_same_rg',
+                    resource_id=f"/subscriptions/{self.subscription_id}/resourceGroups/{rg_name}",
+                    resource_name=rg_name,
+                    region=region,
+                    estimated_monthly_cost=total_cost,
+                    resource_metadata=metadata
+                ))
+
+        except Exception as e:
+            print(f"Error scanning multiple search services in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_search_excessive_partitions(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Cognitive Search services with excessive partitions for their data size.
+
+        Services with multiple partitions but low storage utilization are
+        over-provisioned for their actual data volume.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of search services with excessive partitions
+        """
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.search import SearchManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        min_partitions = rules.get("min_partitions_threshold", 2)
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            search_client = SearchManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=7)
+
+            for svc in search_client.services.list_by_subscription():
+                if svc.location and svc.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(svc.id):
+                    continue
+
+                partition_count = svc.partition_count or 1
+                if partition_count < min_partitions:
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        svc.id,
+                        metric_names=["StorageUsage"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.AVERAGE]
+                    )
+
+                    max_storage_pct = 0
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.average and dp.average > max_storage_pct:
+                                    max_storage_pct = dp.average
+
+                    # If storage usage > 50% per partition, partitions are justified
+                    if max_storage_pct > 50:
+                        continue
+
+                    sku_name = svc.sku.name if svc.sku else 'S1'
+                    replica_count = svc.replica_count or 1
+                    monthly_cost = self._calculate_search_service_cost(sku_name, replica_count, partition_count)
+                    reduced_cost = self._calculate_search_service_cost(sku_name, replica_count, 1)
+                    savings = monthly_cost - reduced_cost
+
+                    metadata = {
+                        'service_name': svc.name,
+                        'service_id': svc.id,
+                        'sku': sku_name,
+                        'replicas': replica_count,
+                        'partitions': partition_count,
+                        'storage_usage_pct': round(max_storage_pct, 1),
+                        'current_cost': round(monthly_cost, 2),
+                        'reduced_cost': round(reduced_cost, 2),
+                        'potential_savings': round(savings, 2),
+                        'orphan_reason': f"Cognitive Search '{svc.name}' has {partition_count} partitions but {max_storage_pct:.1f}% storage usage",
+                        'recommendation': f'Reduce to 1 partition to save ~${savings:.0f}/month',
+                        'confidence_level': 'high' if max_storage_pct < 20 else 'medium',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='search_excessive_partitions',
+                        resource_id=svc.id,
+                        resource_name=svc.name,
+                        region=region,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata=metadata
+                    ))
+                except Exception:
+                    continue
+
+        except Exception as e:
+            print(f"Error scanning excessive search partitions in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_search_no_diagnostic_logs(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Cognitive Search services without diagnostic settings configured.
+
+        Services without diagnostics cannot be monitored for performance issues
+        or query patterns, making optimization difficult.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of search services without diagnostics
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.search import SearchManagementClient
+        from azure.mgmt.monitor import MonitorManagementClient
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            search_client = SearchManagementClient(credential, self.subscription_id)
+            monitor_client = MonitorManagementClient(credential, self.subscription_id)
+
+            for svc in search_client.services.list_by_subscription():
+                if svc.location and svc.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(svc.id):
+                    continue
+
+                try:
+                    diag_settings = list(monitor_client.diagnostic_settings.list(svc.id))
+                    if len(diag_settings) > 0:
+                        continue
+                except Exception:
+                    continue
+
+                sku_name = svc.sku.name if svc.sku else 'S1'
+                replica_count = svc.replica_count or 1
+                partition_count = svc.partition_count or 1
+                monthly_cost = self._calculate_search_service_cost(sku_name, replica_count, partition_count)
+
+                metadata = {
+                    'service_name': svc.name,
+                    'service_id': svc.id,
+                    'sku': sku_name,
+                    'replicas': replica_count,
+                    'partitions': partition_count,
+                    'diagnostic_settings': 0,
+                    'orphan_reason': f"Cognitive Search '{svc.name}' has no diagnostic settings configured",
+                    'recommendation': 'Enable diagnostic logging to monitor query patterns and identify optimization opportunities',
+                    'confidence_level': 'low',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='search_no_diagnostic_logs',
+                    resource_id=svc.id,
+                    resource_name=svc.name,
+                    region=region,
+                    estimated_monthly_cost=monthly_cost,
+                    resource_metadata=metadata
+                ))
+
+        except Exception as e:
+            print(f"Error scanning search diagnostics in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_search_free_tier_in_production(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Free-tier Cognitive Search services in production environments.
+
+        Free tier has significant limitations (50MB storage, 3 indexes, no SLA)
+        and is inappropriate for production workloads.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of Free-tier search services in production
+        """
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.search import SearchManagementClient
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        dev_keywords = ['dev', 'test', 'staging', 'sandbox', 'poc', 'demo', 'lab', 'trial', 'qa']
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            search_client = SearchManagementClient(credential, self.subscription_id)
+
+            for svc in search_client.services.list_by_subscription():
+                if svc.location and svc.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(svc.id):
+                    continue
+
+                sku_name = svc.sku.name if svc.sku else 'S1'
+                if not self._is_search_free_tier(sku_name):
+                    continue
+
+                name_lower = svc.name.lower()
+                parts = svc.id.split('/')
+                rg_idx = parts.index('resourceGroups')
+                rg_lower = parts[rg_idx + 1].lower()
+                tags = svc.tags or {}
+                env_tag = tags.get('environment', tags.get('env', '')).lower()
+
+                is_dev = (
+                    any(kw in name_lower for kw in dev_keywords)
+                    or any(kw in rg_lower for kw in dev_keywords)
+                    or any(kw in env_tag for kw in dev_keywords)
+                )
+                if is_dev:
+                    continue  # Free tier in dev is fine
+
+                metadata = {
+                    'service_name': svc.name,
+                    'service_id': svc.id,
+                    'sku': sku_name,
+                    'limitations': '50MB storage, 3 indexes, no SLA, shared resources',
+                    'orphan_reason': f"Cognitive Search '{svc.name}' uses Free tier in non-dev environment",
+                    'recommendation': 'Upgrade to Basic ($75.78/month) or S1 ($252.57/month) for production SLA',
+                    'confidence_level': 'high',
+                }
+
+                orphans.append(OrphanResourceData(
+                    resource_type='search_free_tier_in_production',
+                    resource_id=svc.id,
+                    resource_name=svc.name,
+                    region=region,
+                    estimated_monthly_cost=0.0,
+                    resource_metadata=metadata
+                ))
+
+        except Exception as e:
+            print(f"Error scanning free-tier search in production in {region}: {str(e)}")
+
+        return orphans
+
+    # Phase 2 - Cognitive Search Metrics-based detection (8 scenarios)
+
+    async def scan_search_low_query_volume(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Cognitive Search services with very low query volume (< 10 queries/day).
+
+        Low query volume on paid tiers indicates the search service may be
+        over-provisioned or could use a lower SKU.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of low-query search services
+        """
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.search import SearchManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        query_threshold_per_day = rules.get("query_threshold_per_day", 10)
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            search_client = SearchManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=7)
+
+            for svc in search_client.services.list_by_subscription():
+                if svc.location and svc.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(svc.id):
+                    continue
+
+                sku_name = svc.sku.name if svc.sku else 'S1'
+                if self._is_search_free_tier(sku_name):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        svc.id,
+                        metric_names=["SearchQueriesPerSecond"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.AVERAGE]
+                    )
+
+                    total_avg_qps = 0
+                    data_points = 0
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.average is not None:
+                                    total_avg_qps += dp.average
+                                    data_points += 1
+
+                    avg_qps = total_avg_qps / max(data_points, 1)
+                    queries_per_day = avg_qps * 86400  # seconds per day
+
+                    if queries_per_day >= query_threshold_per_day:
+                        continue
+
+                    replica_count = svc.replica_count or 1
+                    partition_count = svc.partition_count or 1
+                    monthly_cost = self._calculate_search_service_cost(sku_name, replica_count, partition_count)
+                    downsize = self._get_search_recommended_downsize(sku_name)
+
+                    metadata = {
+                        'service_name': svc.name,
+                        'service_id': svc.id,
+                        'sku': sku_name,
+                        'replicas': replica_count,
+                        'partitions': partition_count,
+                        'avg_qps': round(avg_qps, 4),
+                        'queries_per_day': round(queries_per_day, 1),
+                        'threshold_per_day': query_threshold_per_day,
+                        'orphan_reason': f"Cognitive Search '{svc.name}' averages {queries_per_day:.1f} queries/day (threshold: {query_threshold_per_day})",
+                        'recommendation': f'Downsize to {downsize}' if downsize else 'Consider deleting if queries are near zero',
+                        'confidence_level': 'high' if queries_per_day < 1 else 'medium',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='search_low_query_volume',
+                        resource_id=svc.id,
+                        resource_name=svc.name,
+                        region=region,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata=metadata
+                    ))
+                except Exception:
+                    continue
+
+        except Exception as e:
+            print(f"Error scanning low query search services in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_search_low_document_count(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Cognitive Search services with very few documents on expensive tiers.
+
+        Services with < 1000 documents on S2+ tiers are over-provisioned
+        and could use Basic or S1.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of search services with low document counts
+        """
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.search import SearchManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        doc_threshold = rules.get("document_threshold", 1000)
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            search_client = SearchManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=1)
+
+            for svc in search_client.services.list_by_subscription():
+                if svc.location and svc.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(svc.id):
+                    continue
+
+                sku_name = svc.sku.name if svc.sku else 'S1'
+                if not self._is_search_premium_tier(sku_name):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        svc.id,
+                        metric_names=["DocumentCount"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.MAXIMUM]
+                    )
+
+                    max_docs = 0
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.maximum and dp.maximum > max_docs:
+                                    max_docs = dp.maximum
+
+                    if max_docs >= doc_threshold:
+                        continue
+
+                    replica_count = svc.replica_count or 1
+                    partition_count = svc.partition_count or 1
+                    monthly_cost = self._calculate_search_service_cost(sku_name, replica_count, partition_count)
+                    basic_cost = self._calculate_search_service_cost('Basic', 1, 1)
+                    savings = monthly_cost - basic_cost
+
+                    metadata = {
+                        'service_name': svc.name,
+                        'service_id': svc.id,
+                        'sku': sku_name,
+                        'replicas': replica_count,
+                        'partitions': partition_count,
+                        'document_count': int(max_docs),
+                        'threshold': doc_threshold,
+                        'potential_savings': round(savings, 2),
+                        'orphan_reason': f"Cognitive Search '{svc.name}' ({sku_name}) has only {int(max_docs)} documents (threshold: {doc_threshold})",
+                        'recommendation': f'Downgrade to Basic tier to save ~${savings:.0f}/month',
+                        'confidence_level': 'high',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='search_low_document_count',
+                        resource_id=svc.id,
+                        resource_name=svc.name,
+                        region=region,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata=metadata
+                    ))
+                except Exception:
+                    continue
+
+        except Exception as e:
+            print(f"Error scanning low doc count search services in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_search_high_query_latency(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Cognitive Search services with high average query latency (> 500ms).
+
+        High latency despite having replicas/partitions may indicate
+        misconfiguration, poor index design, or workload mismatch.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of high-latency search services
+        """
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.search import SearchManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        latency_threshold_ms = rules.get("latency_threshold_ms", 500)
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            search_client = SearchManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=7)
+
+            for svc in search_client.services.list_by_subscription():
+                if svc.location and svc.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(svc.id):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        svc.id,
+                        metric_names=["SearchLatency"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.AVERAGE]
+                    )
+
+                    total_latency = 0
+                    data_points = 0
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.average is not None:
+                                    total_latency += dp.average
+                                    data_points += 1
+
+                    if data_points == 0:
+                        continue
+
+                    avg_latency = total_latency / data_points
+                    if avg_latency <= latency_threshold_ms:
+                        continue
+
+                    sku_name = svc.sku.name if svc.sku else 'S1'
+                    replica_count = svc.replica_count or 1
+                    partition_count = svc.partition_count or 1
+                    monthly_cost = self._calculate_search_service_cost(sku_name, replica_count, partition_count)
+
+                    metadata = {
+                        'service_name': svc.name,
+                        'service_id': svc.id,
+                        'sku': sku_name,
+                        'replicas': replica_count,
+                        'partitions': partition_count,
+                        'avg_latency_ms': round(avg_latency, 2),
+                        'threshold_ms': latency_threshold_ms,
+                        'orphan_reason': f"Cognitive Search '{svc.name}' has {avg_latency:.0f}ms avg latency (threshold: {latency_threshold_ms}ms)",
+                        'recommendation': 'Investigate query patterns and index design; additional replicas may not help',
+                        'confidence_level': 'medium',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='search_high_query_latency',
+                        resource_id=svc.id,
+                        resource_name=svc.name,
+                        region=region,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata=metadata
+                    ))
+                except Exception:
+                    continue
+
+        except Exception as e:
+            print(f"Error scanning high latency search services in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_search_high_throttled_queries(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Cognitive Search services with high throttled query percentage.
+
+        High throttling (> 5%) indicates the service is under-provisioned
+        and may need more replicas, or queries need optimization.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of search services with high throttling
+        """
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.search import SearchManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        throttle_threshold_pct = rules.get("throttle_threshold_pct", 5)
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            search_client = SearchManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=7)
+
+            for svc in search_client.services.list_by_subscription():
+                if svc.location and svc.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(svc.id):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        svc.id,
+                        metric_names=["ThrottledSearchQueriesPercentage"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.AVERAGE]
+                    )
+
+                    total_throttle = 0
+                    data_points = 0
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.average is not None:
+                                    total_throttle += dp.average
+                                    data_points += 1
+
+                    if data_points == 0:
+                        continue
+
+                    avg_throttle = total_throttle / data_points
+                    if avg_throttle <= throttle_threshold_pct:
+                        continue
+
+                    sku_name = svc.sku.name if svc.sku else 'S1'
+                    replica_count = svc.replica_count or 1
+                    partition_count = svc.partition_count or 1
+                    monthly_cost = self._calculate_search_service_cost(sku_name, replica_count, partition_count)
+
+                    metadata = {
+                        'service_name': svc.name,
+                        'service_id': svc.id,
+                        'sku': sku_name,
+                        'replicas': replica_count,
+                        'partitions': partition_count,
+                        'avg_throttle_pct': round(avg_throttle, 2),
+                        'threshold_pct': throttle_threshold_pct,
+                        'orphan_reason': f"Cognitive Search '{svc.name}' has {avg_throttle:.1f}% throttled queries (threshold: {throttle_threshold_pct}%)",
+                        'recommendation': 'Add replicas to reduce throttling, or optimize query patterns',
+                        'confidence_level': 'high' if avg_throttle > 20 else 'medium',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='search_high_throttled_queries',
+                        resource_id=svc.id,
+                        resource_name=svc.name,
+                        region=region,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata=metadata
+                    ))
+                except Exception:
+                    continue
+
+        except Exception as e:
+            print(f"Error scanning throttled search services in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_search_low_cpu_utilization(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Cognitive Search services with low CPU utilization (< 10%).
+
+        Low CPU on paid tiers indicates the service is significantly
+        over-provisioned for its workload.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of low-CPU search services
+        """
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.search import SearchManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        cpu_threshold = rules.get("cpu_threshold_pct", 10)
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            search_client = SearchManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=7)
+
+            for svc in search_client.services.list_by_subscription():
+                if svc.location and svc.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(svc.id):
+                    continue
+
+                sku_name = svc.sku.name if svc.sku else 'S1'
+                if self._is_search_free_tier(sku_name):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        svc.id,
+                        metric_names=["SearchQueriesPerSecond"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(hours=1),
+                        aggregations=[MetricAggregationType.AVERAGE]
+                    )
+
+                    # Use QPS as proxy for CPU - low QPS means low CPU
+                    max_qps = 0
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.average and dp.average > max_qps:
+                                    max_qps = dp.average
+
+                    # S1 handles ~15 QPS per replica, estimate CPU usage
+                    replica_count = svc.replica_count or 1
+                    max_capacity_qps = 15 * replica_count
+                    estimated_cpu = (max_qps / max_capacity_qps) * 100 if max_capacity_qps > 0 else 0
+
+                    if estimated_cpu >= cpu_threshold:
+                        continue
+
+                    partition_count = svc.partition_count or 1
+                    monthly_cost = self._calculate_search_service_cost(sku_name, replica_count, partition_count)
+                    downsize = self._get_search_recommended_downsize(sku_name)
+
+                    metadata = {
+                        'service_name': svc.name,
+                        'service_id': svc.id,
+                        'sku': sku_name,
+                        'replicas': replica_count,
+                        'partitions': partition_count,
+                        'max_qps': round(max_qps, 4),
+                        'estimated_cpu_pct': round(estimated_cpu, 1),
+                        'cpu_threshold_pct': cpu_threshold,
+                        'orphan_reason': f"Cognitive Search '{svc.name}' estimated CPU {estimated_cpu:.1f}% (max QPS: {max_qps:.2f})",
+                        'recommendation': f'Downsize to {downsize}' if downsize else 'Reduce replicas',
+                        'confidence_level': 'high' if estimated_cpu < 2 else 'medium',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='search_low_cpu_utilization',
+                        resource_id=svc.id,
+                        resource_name=svc.name,
+                        region=region,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata=metadata
+                    ))
+                except Exception:
+                    continue
+
+        except Exception as e:
+            print(f"Error scanning low CPU search services in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_search_low_storage_utilization(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Cognitive Search services with low storage utilization (< 10%).
+
+        Services using very little of their available storage capacity
+        could use a lower SKU tier.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of low-storage search services
+        """
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.search import SearchManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        storage_threshold_pct = rules.get("storage_threshold_pct", 10)
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            search_client = SearchManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=7)
+
+            for svc in search_client.services.list_by_subscription():
+                if svc.location and svc.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(svc.id):
+                    continue
+
+                sku_name = svc.sku.name if svc.sku else 'S1'
+                if self._is_search_free_tier(sku_name):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        svc.id,
+                        metric_names=["StorageUsage"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.AVERAGE]
+                    )
+
+                    max_storage_pct = 0
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            for dp in ts.data:
+                                if dp.average and dp.average > max_storage_pct:
+                                    max_storage_pct = dp.average
+
+                    if max_storage_pct >= storage_threshold_pct:
+                        continue
+
+                    replica_count = svc.replica_count or 1
+                    partition_count = svc.partition_count or 1
+                    monthly_cost = self._calculate_search_service_cost(sku_name, replica_count, partition_count)
+                    downsize = self._get_search_recommended_downsize(sku_name)
+
+                    metadata = {
+                        'service_name': svc.name,
+                        'service_id': svc.id,
+                        'sku': sku_name,
+                        'replicas': replica_count,
+                        'partitions': partition_count,
+                        'storage_usage_pct': round(max_storage_pct, 1),
+                        'threshold_pct': storage_threshold_pct,
+                        'orphan_reason': f"Cognitive Search '{svc.name}' uses {max_storage_pct:.1f}% of available storage",
+                        'recommendation': f'Downsize to {downsize} tier' if downsize else 'Reduce partitions',
+                        'confidence_level': 'high' if max_storage_pct < 3 else 'medium',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='search_low_storage_utilization',
+                        resource_id=svc.id,
+                        resource_name=svc.name,
+                        region=region,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata=metadata
+                    ))
+                except Exception:
+                    continue
+
+        except Exception as e:
+            print(f"Error scanning low storage search services in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_search_low_skillset_executions(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Cognitive Search services with AI enrichment configured but low skillset executions.
+
+        Services paying for AI enrichment (skillsets) but barely using them
+        are wasting money on cognitive services integration.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of search services with low skillset usage
+        """
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.search import SearchManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        execution_threshold = rules.get("min_executions_per_day", 10)
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            search_client = SearchManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=7)
+
+            for svc in search_client.services.list_by_subscription():
+                if svc.location and svc.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(svc.id):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        svc.id,
+                        metric_names=["SkillExecutionCount"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.TOTAL]
+                    )
+
+                    total_executions = 0
+                    data_points = 0
+                    has_skillset_data = False
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            has_skillset_data = True
+                            for dp in ts.data:
+                                if dp.total is not None:
+                                    total_executions += dp.total
+                                    data_points += 1
+
+                    if not has_skillset_data:
+                        continue  # No skillsets configured
+
+                    avg_per_day = total_executions / max(data_points, 1)
+                    if avg_per_day >= execution_threshold:
+                        continue
+
+                    sku_name = svc.sku.name if svc.sku else 'S1'
+                    replica_count = svc.replica_count or 1
+                    partition_count = svc.partition_count or 1
+                    monthly_cost = self._calculate_search_service_cost(sku_name, replica_count, partition_count)
+
+                    metadata = {
+                        'service_name': svc.name,
+                        'service_id': svc.id,
+                        'sku': sku_name,
+                        'replicas': replica_count,
+                        'partitions': partition_count,
+                        'avg_skillset_executions_per_day': round(avg_per_day, 1),
+                        'threshold_per_day': execution_threshold,
+                        'total_executions_7d': int(total_executions),
+                        'orphan_reason': f"Cognitive Search '{svc.name}' has skillsets but only {avg_per_day:.1f} executions/day",
+                        'recommendation': 'Remove unused skillsets or disable AI enrichment pipeline to reduce costs',
+                        'confidence_level': 'medium',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='search_low_skillset_executions',
+                        resource_id=svc.id,
+                        resource_name=svc.name,
+                        region=region,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata=metadata
+                    ))
+                except Exception:
+                    continue
+
+        except Exception as e:
+            print(f"Error scanning low skillset search services in {region}: {str(e)}")
+
+        return orphans
+
+    async def scan_search_low_indexer_utilization(
+        self, region: str, detection_rules: dict | None = None
+    ) -> list[OrphanResourceData]:
+        """
+        Scan for Cognitive Search services with low indexer activity.
+
+        Services with indexers configured but very low document processing
+        rate may have stale or misconfigured data pipelines.
+
+        Args:
+            region: Azure region to scan
+            detection_rules: Optional detection configuration
+
+        Returns:
+            List of search services with low indexer utilization
+        """
+        from datetime import datetime, timezone
+        from azure.identity import ClientSecretCredential
+        from azure.mgmt.search import SearchManagementClient
+        from azure.monitor.query import MetricsQueryClient, MetricAggregationType
+
+        rules = detection_rules or {}
+        if not rules.get("enabled", True):
+            return []
+
+        docs_threshold = rules.get("indexed_docs_threshold_per_day", 10)
+        orphans: list[OrphanResourceData] = []
+
+        try:
+            credential = ClientSecretCredential(
+                tenant_id=self.tenant_id,
+                client_id=self.client_id,
+                client_secret=self.client_secret
+            )
+            search_client = SearchManagementClient(credential, self.subscription_id)
+            metrics_client = MetricsQueryClient(credential)
+
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=7)
+
+            for svc in search_client.services.list_by_subscription():
+                if svc.location and svc.location.lower().replace(" ", "") != region.lower().replace(" ", ""):
+                    continue
+                if not self._is_resource_in_scope(svc.id):
+                    continue
+
+                try:
+                    response = metrics_client.query_resource(
+                        svc.id,
+                        metric_names=["DocumentsProcessedCount"],
+                        timespan=(start_time, end_time),
+                        granularity=timedelta(days=1),
+                        aggregations=[MetricAggregationType.TOTAL]
+                    )
+
+                    total_docs = 0
+                    data_points = 0
+                    has_indexer_data = False
+                    for metric in response.metrics:
+                        for ts in metric.timeseries:
+                            has_indexer_data = True
+                            for dp in ts.data:
+                                if dp.total is not None:
+                                    total_docs += dp.total
+                                    data_points += 1
+
+                    if not has_indexer_data:
+                        continue  # No indexers configured
+
+                    avg_docs_per_day = total_docs / max(data_points, 1)
+                    if avg_docs_per_day >= docs_threshold:
+                        continue
+
+                    sku_name = svc.sku.name if svc.sku else 'S1'
+                    replica_count = svc.replica_count or 1
+                    partition_count = svc.partition_count or 1
+                    monthly_cost = self._calculate_search_service_cost(sku_name, replica_count, partition_count)
+
+                    metadata = {
+                        'service_name': svc.name,
+                        'service_id': svc.id,
+                        'sku': sku_name,
+                        'replicas': replica_count,
+                        'partitions': partition_count,
+                        'avg_docs_indexed_per_day': round(avg_docs_per_day, 1),
+                        'threshold_per_day': docs_threshold,
+                        'total_docs_7d': int(total_docs),
+                        'orphan_reason': f"Cognitive Search '{svc.name}' indexer processes {avg_docs_per_day:.1f} docs/day (threshold: {docs_threshold})",
+                        'recommendation': 'Review indexer configuration - data pipeline may be stale or misconfigured',
+                        'confidence_level': 'medium' if avg_docs_per_day > 0 else 'high',
+                    }
+
+                    orphans.append(OrphanResourceData(
+                        resource_type='search_low_indexer_utilization',
+                        resource_id=svc.id,
+                        resource_name=svc.name,
+                        region=region,
+                        estimated_monthly_cost=monthly_cost,
+                        resource_metadata=metadata
+                    ))
+                except Exception:
+                    continue
+
+        except Exception as e:
+            print(f"Error scanning low indexer search services in {region}: {str(e)}")
 
         return orphans
 
