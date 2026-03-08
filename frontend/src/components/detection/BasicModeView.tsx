@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { ChevronDown, ChevronRight, Save, RotateCcw, HardDrive, Globe, Camera, Server } from "lucide-react";
+import { ChevronDown, ChevronRight, Save, RotateCcw, HardDrive, Globe, Camera, Server, Database, Zap, Search, Activity, Archive, Cpu, Network, Layers } from "lucide-react";
 
 interface GroupedFamily {
   resource_family: string;
@@ -31,15 +31,45 @@ interface BasicModeViewProps {
 }
 
 const FAMILY_ICONS: { [key: string]: any } = {
+  // AWS
   ebs_volume: HardDrive,
   elastic_ip: Globe,
   ebs_snapshot: Camera,
   ec2_instance: Server,
+  // Azure - Compute & Storage
   managed_disk: HardDrive,
   public_ip: Globe,
   disk_snapshot: Camera,
   virtual_machine: Server,
   nat_gateway: Globe,
+  container_app: Layers,
+  functions: Zap,
+  app_service: Zap,
+  // Azure - Storage
+  storage_account: Archive,
+  netapp: Archive,
+  // Azure - Networking
+  load_balancer_appgw: Network,
+  expressroute: Network,
+  vpn_gateway: Network,
+  network_interface: Network,
+  // Azure - Database
+  sql_database: Database,
+  cosmosdb: Database,
+  cosmosdb_table: Database,
+  postgres_mysql: Database,
+  synapse: Database,
+  redis: Database,
+  // Azure - Virtual Desktop
+  avd: Server,
+  // Azure - Big Data & AI
+  hdinsight_spark: Cpu,
+  ml_compute_instance: Cpu,
+  search: Search,
+  // Azure - Messaging
+  eventhub: Activity,
+  // Azure - Other
+  azure_aks_cluster: Cpu,
 };
 
 export function BasicModeView({ selectedProvider, searchQuery, showSuccess, showError }: BasicModeViewProps) {
@@ -147,8 +177,11 @@ export function BasicModeView({ selectedProvider, searchQuery, showSuccess, show
       familyName.startsWith("redis") ||
       familyName.startsWith("storage") ||
       familyName.startsWith("functions") ||
+      familyName.startsWith("eventhub") ||
+      familyName.startsWith("netapp") ||
+      familyName.startsWith("search") ||
       familyName.startsWith("container_app") ||
-      familyName.startsWith("avd_") ||
+      familyName.startsWith("avd") ||
       familyName.startsWith("hdinsight") ||
       familyName.startsWith("ml_compute") ||
       familyName.startsWith("app_service") ||
