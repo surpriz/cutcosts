@@ -143,21 +143,21 @@ async def test_get_resource_stats(
 
 @pytest.mark.asyncio
 async def test_get_top_cost_resources(
-    authenticated_async_client: AsyncClient,
+    paid_authenticated_async_client: AsyncClient,
 ) -> None:
-    """Test getting top cost resources."""
-    response = await authenticated_async_client.get("/api/v1/resources/top-cost")
+    """Test getting top cost resources (requires paid plan)."""
+    response = await paid_authenticated_async_client.get("/api/v1/resources/top-cost")
     assert response.status_code == 200
     assert isinstance(response.json(), list)
 
 
 @pytest.mark.asyncio
 async def test_get_resource_by_id(
-    authenticated_async_client: AsyncClient,
+    paid_authenticated_async_client: AsyncClient,
     test_orphan_resource: OrphanResource,
 ) -> None:
-    """Test getting a specific resource by ID."""
-    response = await authenticated_async_client.get(
+    """Test getting a specific resource by ID (requires paid plan)."""
+    response = await paid_authenticated_async_client.get(
         f"/api/v1/resources/{test_orphan_resource.id}"
     )
     assert response.status_code == 200
@@ -168,21 +168,21 @@ async def test_get_resource_by_id(
 
 @pytest.mark.asyncio
 async def test_get_resource_not_found(
-    authenticated_async_client: AsyncClient,
+    paid_authenticated_async_client: AsyncClient,
 ) -> None:
-    """Test getting non-existent resource returns 404."""
+    """Test getting non-existent resource returns 404 (requires paid plan)."""
     fake_id = str(uuid.uuid4())
-    response = await authenticated_async_client.get(f"/api/v1/resources/{fake_id}")
+    response = await paid_authenticated_async_client.get(f"/api/v1/resources/{fake_id}")
     assert response.status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_update_resource_status(
-    authenticated_async_client: AsyncClient,
+    paid_authenticated_async_client: AsyncClient,
     test_orphan_resource: OrphanResource,
 ) -> None:
-    """Test updating resource status (e.g., marking as ignored)."""
-    response = await authenticated_async_client.patch(
+    """Test updating resource status (requires paid plan)."""
+    response = await paid_authenticated_async_client.patch(
         f"/api/v1/resources/{test_orphan_resource.id}",
         json={"status": "ignored", "ignored_reason": "Test ignore"},
     )
@@ -193,11 +193,11 @@ async def test_update_resource_status(
 
 @pytest.mark.asyncio
 async def test_update_resource_invalid_status(
-    authenticated_async_client: AsyncClient,
+    paid_authenticated_async_client: AsyncClient,
     test_orphan_resource: OrphanResource,
 ) -> None:
-    """Test that invalid status update fails."""
-    response = await authenticated_async_client.patch(
+    """Test that invalid status update fails (requires paid plan)."""
+    response = await paid_authenticated_async_client.patch(
         f"/api/v1/resources/{test_orphan_resource.id}",
         json={"status": "invalid_status"},
     )
@@ -206,17 +206,17 @@ async def test_update_resource_invalid_status(
 
 @pytest.mark.asyncio
 async def test_delete_resource(
-    authenticated_async_client: AsyncClient,
+    paid_authenticated_async_client: AsyncClient,
     test_orphan_resource: OrphanResource,
 ) -> None:
-    """Test deleting a resource record."""
-    response = await authenticated_async_client.delete(
+    """Test deleting a resource record (requires paid plan)."""
+    response = await paid_authenticated_async_client.delete(
         f"/api/v1/resources/{test_orphan_resource.id}"
     )
     assert response.status_code == 204
 
     # Verify resource is deleted
-    response = await authenticated_async_client.get(
+    response = await paid_authenticated_async_client.get(
         f"/api/v1/resources/{test_orphan_resource.id}"
     )
     assert response.status_code == 404

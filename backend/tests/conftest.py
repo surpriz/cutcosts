@@ -16,6 +16,7 @@ from app.core.database import Base, get_db
 from app.main import app
 from app.models.user import User
 from app.models.subscription_plan import SubscriptionPlan
+from app.models.user_subscription import UserSubscription
 
 # Use SQLite in-memory database for tests (faster and no setup needed)
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -157,6 +158,74 @@ async def free_subscription_plan(db_session: AsyncSession) -> SubscriptionPlan:
     await db_session.commit()
     await db_session.refresh(plan)
     return plan
+
+
+@pytest.fixture
+async def pro_subscription_plan(db_session: AsyncSession) -> SubscriptionPlan:
+    """Create a pro subscription plan for tests that require paid access."""
+    from decimal import Decimal
+
+    plan = SubscriptionPlan(
+        name="pro",
+        display_name="Pro",
+        description="Pro plan for testing",
+        price_monthly=Decimal("49.00"),
+        currency="EUR",
+        max_scans_per_month=None,
+        max_cloud_accounts=10,
+        has_ai_chat=True,
+        has_impact_tracking=True,
+        has_email_notifications=True,
+        has_api_access=True,
+        has_priority_support=False,
+        is_active=True,
+    )
+    db_session.add(plan)
+    await db_session.commit()
+    await db_session.refresh(plan)
+    return plan
+
+
+@pytest.fixture
+async def paid_test_user_subscription(
+    db_session: AsyncSession,
+    test_user: User,
+    pro_subscription_plan: SubscriptionPlan,
+) -> UserSubscription:
+    """Create a pro subscription for the test user."""
+    from datetime import datetime
+
+    subscription = UserSubscription(
+        user_id=test_user.id,
+        plan_id=pro_subscription_plan.id,
+        status="active",
+        current_period_start=datetime.utcnow(),
+        current_period_end=None,
+        scans_used_this_month=0,
+        last_scan_reset_at=datetime.utcnow(),
+    )
+    db_session.add(subscription)
+    await db_session.commit()
+    await db_session.refresh(subscription)
+    return subscription
+
+
+@pytest.fixture
+async def paid_authenticated_async_client(
+    async_client: AsyncClient,
+    test_user: User,
+    paid_test_user_subscription: UserSubscription,
+) -> AsyncClient:
+    """Create an async test client with JWT authentication for a paid user."""
+    from app.core.security import create_access_token
+    from datetime import timedelta
+
+    access_token = create_access_token(
+        data={"sub": str(test_user.id)},
+        expires_delta=timedelta(minutes=30),
+    )
+    async_client.headers.update({"Authorization": f"Bearer {access_token}"})
+    return async_client
 
 
 @pytest.fixture
