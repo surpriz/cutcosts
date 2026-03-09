@@ -28,9 +28,13 @@ class User(Base):
         index=True,
         nullable=False,
     )
-    hashed_password: Mapped[str] = mapped_column(
+    hashed_password: Mapped[str | None] = mapped_column(
         String(255),
-        nullable=False,
+        nullable=True,
+    )
+    oauth_provider: Mapped[str | None] = mapped_column(
+        String(50),
+        nullable=True,
     )
     full_name: Mapped[str | None] = mapped_column(
         String(255),

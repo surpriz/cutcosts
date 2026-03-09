@@ -60,31 +60,77 @@ function clearAuthTokens(): void {
 }
 
 /**
+ * Shared refresh promise to prevent concurrent token refresh calls (mutex).
+ * Exported so ensureValidToken() can share the same mutex.
+ */
+let refreshPromise: Promise<AuthTokens> | null = null;
+
+function performTokenRefresh(): Promise<AuthTokens> {
+  if (!refreshPromise) {
+    refreshPromise = authAPI.refreshToken().finally(() => {
+      refreshPromise = null;
+    });
+  }
+  return refreshPromise;
+}
+
+function buildHeaders(
+  options: RequestInit,
+  token: string | null
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(options.headers as Record<string, string>),
+  };
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  return headers;
+}
+
+/**
  * Generic fetch wrapper with auth and error handling
  */
 async function fetchAPI<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const token = getAuthToken();
-
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(options.headers as Record<string, string>),
-  };
-
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-
   const response = await fetch(`${API_URL}${endpoint}`, {
     ...options,
-    headers,
+    headers: buildHeaders(options, getAuthToken()),
   });
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: "Unknown error" }));
     const apiError = new APIError(response.status, error.detail || "API Error");
+
+    // On 401, attempt token refresh + retry (unless this is already a refresh call)
+    if (response.status === 401 && !endpoint.includes("/auth/refresh")) {
+      try {
+        await performTokenRefresh();
+      } catch {
+        // Refresh failed — clear tokens and redirect to login
+        clearAuthTokens();
+        if (typeof window !== "undefined") {
+          window.location.href = "/auth/login";
+        }
+        throw apiError;
+      }
+
+      // Retry the original request with the new token (errors propagate normally)
+      const retryResponse = await fetch(`${API_URL}${endpoint}`, {
+        ...options,
+        headers: buildHeaders(options, getAuthToken()),
+      });
+
+      if (!retryResponse.ok) {
+        const retryError = await retryResponse.json().catch(() => ({ detail: "Unknown error" }));
+        throw new APIError(retryResponse.status, retryError.detail || "API Error");
+      }
+
+      if (retryResponse.status === 204) return undefined as T;
+      return retryResponse.json();
+    }
 
     // Capture API errors in Sentry (except 401/403 which are normal auth errors)
     if (typeof window !== "undefined" && response.status !== 401 && response.status !== 403) {
@@ -184,6 +230,11 @@ export const authAPI = {
 
   logout(): void {
     clearAuthTokens();
+  },
+
+  googleLogin(): void {
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    window.location.href = `${apiUrl}/api/v1/auth/google/login`;
   },
 
   async verifyEmail(token: string): Promise<{ message: string }> {
@@ -710,4 +761,4 @@ const api = {
 };
 
 export default api;
-export { APIError, clearAuthTokens, getAuthToken, setAuthTokens };
+export { APIError, clearAuthTokens, getAuthToken, performTokenRefresh, setAuthTokens };

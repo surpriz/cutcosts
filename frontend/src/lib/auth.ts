@@ -2,7 +2,7 @@
  * Authentication utilities
  */
 
-import { authAPI } from "./api";
+import { authAPI, performTokenRefresh } from "./api";
 import type { User } from "@/types";
 
 export function isAuthenticated(): boolean {
@@ -65,7 +65,8 @@ export function isTokenExpired(token: string): boolean {
 }
 
 /**
- * Auto-refresh token if expired
+ * Auto-refresh token if expired.
+ * Uses the shared mutex from api.ts to avoid concurrent refresh calls.
  */
 export async function ensureValidToken(): Promise<boolean> {
   if (typeof window === "undefined") return false;
@@ -75,9 +76,9 @@ export async function ensureValidToken(): Promise<boolean> {
 
   if (isTokenExpired(token)) {
     try {
-      await authAPI.refreshToken();
+      await performTokenRefresh();
       return true;
-    } catch (error) {
+    } catch {
       logout();
       return false;
     }

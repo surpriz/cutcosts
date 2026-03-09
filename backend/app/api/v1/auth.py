@@ -1,10 +1,15 @@
 """Authentication endpoints."""
 
+import secrets as _secrets
 from datetime import timedelta
 from typing import Annotated
+from urllib.parse import urlencode
 
+import httpx
+import redis.asyncio as aioredis
 import structlog
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response, status
+from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -429,7 +434,7 @@ async def login(
         refresh_token_expires = timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
 
     refresh_token = create_refresh_token(
-        data={"sub": str(user.id)},
+        data={"sub": str(user.id), "remember_me": remember_me},
         expires_delta=refresh_token_expires
     )
 
@@ -622,12 +627,22 @@ async def refresh_token(
             detail="Inactive user",
         )
 
-    # Create new tokens
+    # Create new tokens, preserving remember_me from original refresh token
+    remember_me = bool(payload.get("remember_me", False))
+    refresh_token_expires = (
+        timedelta(days=settings.REFRESH_TOKEN_REMEMBER_ME_EXPIRE_DAYS)
+        if remember_me
+        else timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    )
+
     access_token = create_access_token(
         data={"sub": str(user.id)},
         expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
     )
-    new_refresh_token = create_refresh_token(data={"sub": str(user.id)})
+    new_refresh_token = create_refresh_token(
+        data={"sub": str(user.id), "remember_me": remember_me},
+        expires_delta=refresh_token_expires,
+    )
 
     return {
         "access_token": access_token,
@@ -1217,6 +1232,13 @@ async def change_password(
     Raises:
         HTTPException: If current password is incorrect
     """
+    # OAuth-only users cannot change password (they have no password set)
+    if not current_user.hashed_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot change password for accounts linked via Google. Use password reset to set a password.",
+        )
+
     # Verify current password
     if not verify_password(change_request.current_password, current_user.hashed_password):
         raise HTTPException(
@@ -1236,3 +1258,226 @@ async def change_password(
     return {
         "message": "Password changed successfully.",
     }
+
+
+# ---------------------------------------------------------------------------
+# Google OAuth endpoints
+# ---------------------------------------------------------------------------
+
+
+async def _get_oauth_redis() -> aioredis.Redis:
+    """Get a Redis client for OAuth state management."""
+    return aioredis.from_url(str(settings.REDIS_URL), decode_responses=True)
+
+
+@router.get(
+    "/google/login",
+    summary="Initiate Google OAuth flow",
+    description="Redirects the browser to Google's OAuth consent page.",
+    responses={302: {"description": "Redirect to Google OAuth consent"}},
+)
+@auth_login_limit
+async def google_login(request: Request, response: Response) -> RedirectResponse:
+    """
+    Initiate Google OAuth by redirecting to Google's consent screen.
+
+    Generates a CSRF state token stored in Redis with 10-minute TTL.
+    """
+    if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Google OAuth is not configured",
+        )
+
+    state = _secrets.token_urlsafe(32)
+    redis_client = await _get_oauth_redis()
+    try:
+        await redis_client.setex(f"oauth_state:{state}", 600, "1")
+    finally:
+        await redis_client.aclose()
+
+    params = {
+        "client_id": settings.GOOGLE_CLIENT_ID,
+        "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "access_type": "offline",
+        "prompt": "select_account",
+    }
+    google_auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
+
+    logger.info("auth.google_oauth_initiated")
+    return RedirectResponse(url=google_auth_url, status_code=302)
+
+
+@router.get(
+    "/google/callback",
+    summary="Handle Google OAuth callback",
+    description="Processes the OAuth callback from Google, creates or logs in the user, and redirects to the frontend with JWT tokens.",
+    responses={302: {"description": "Redirect to frontend with tokens or error"}},
+)
+@auth_login_limit
+async def google_callback(
+    request: Request,
+    response: Response,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+) -> RedirectResponse:
+    """
+    Process Google OAuth callback.
+
+    - Validates CSRF state against Redis
+    - Exchanges authorization code for Google tokens
+    - Fetches user info from Google
+    - Creates new user or logs in existing Google user
+    - Refuses login if email already registered with password (no merge)
+    - Redirects to frontend with JWT tokens in query params
+    """
+    frontend_callback = f"{settings.FRONTEND_URL}/auth/oauth-callback"
+
+    # Handle Google-side errors (user denied access, etc.)
+    if error:
+        logger.warning("auth.google_oauth_error", error=error)
+        return RedirectResponse(
+            url=f"{frontend_callback}?error=oauth_failed", status_code=302
+        )
+
+    if not code or not state:
+        return RedirectResponse(
+            url=f"{frontend_callback}?error=oauth_failed", status_code=302
+        )
+
+    # Validate CSRF state (atomic delete = one-time use)
+    redis_client = await _get_oauth_redis()
+    try:
+        state_key = f"oauth_state:{state}"
+        deleted = await redis_client.delete(state_key)
+        if deleted != 1:
+            logger.warning("auth.google_invalid_state")
+            return RedirectResponse(
+                url=f"{frontend_callback}?error=oauth_failed", status_code=302
+            )
+    finally:
+        await redis_client.aclose()
+
+    # Exchange authorization code for tokens
+    async with httpx.AsyncClient() as client:
+        try:
+            token_response = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "code": code,
+                    "client_id": settings.GOOGLE_CLIENT_ID,
+                    "client_secret": settings.GOOGLE_CLIENT_SECRET,
+                    "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+                    "grant_type": "authorization_code",
+                },
+            )
+            token_response.raise_for_status()
+            token_data = token_response.json()
+        except httpx.HTTPError as exc:
+            logger.error("auth.google_token_exchange_failed", error=str(exc))
+            return RedirectResponse(
+                url=f"{frontend_callback}?error=oauth_failed", status_code=302
+            )
+
+    # Fetch user info from Google
+    async with httpx.AsyncClient() as client:
+        try:
+            userinfo_response = await client.get(
+                "https://www.googleapis.com/oauth2/v3/userinfo",
+                headers={"Authorization": f"Bearer {token_data['access_token']}"},
+            )
+            userinfo_response.raise_for_status()
+            userinfo = userinfo_response.json()
+        except httpx.HTTPError as exc:
+            logger.error("auth.google_userinfo_failed", error=str(exc))
+            return RedirectResponse(
+                url=f"{frontend_callback}?error=oauth_failed", status_code=302
+            )
+
+    google_email: str = userinfo.get("email", "").lower().strip()
+    google_name: str | None = userinfo.get("name")
+
+    # Verify Google confirmed the email is valid
+    if not google_email or not userinfo.get("email_verified", False):
+        return RedirectResponse(
+            url=f"{frontend_callback}?error=oauth_failed", status_code=302
+        )
+
+    # Check for existing user
+    existing_user = await user_crud.get_user_by_email(db, google_email)
+
+    if existing_user:
+        # Email exists but was registered with password - refuse merge (Option B)
+        if existing_user.oauth_provider is None:
+            logger.info(
+                "auth.google_oauth_email_conflict",
+                email=google_email,
+            )
+            return RedirectResponse(
+                url=f"{frontend_callback}?error=use_password", status_code=302
+            )
+        # Existing Google user - log them in
+        user = existing_user
+        logger.info("auth.google_oauth_login", user_id=str(user.id))
+    else:
+        # New user - create account via OAuth
+        user = await user_crud.create_oauth_user(
+            db,
+            email=google_email,
+            full_name=google_name,
+            oauth_provider="google",
+        )
+        # Create free subscription
+        subscription_service = SubscriptionService(db)
+        try:
+            await subscription_service.create_free_subscription(user.id)
+            logger.info(
+                "auth.google_free_subscription_created",
+                user_id=str(user.id),
+            )
+        except Exception as exc:
+            logger.error(
+                "auth.google_free_subscription_failed",
+                user_id=str(user.id),
+                error=str(exc),
+            )
+        # Send welcome email (non-blocking)
+        try:
+            email_service.send_welcome_email(
+                email=user.email,
+                full_name=user.full_name or "User",
+            )
+        except Exception:
+            pass
+        logger.info("auth.google_oauth_registered", user_id=str(user.id))
+
+    # Check user is active and email is verified
+    if not user.is_active:
+        return RedirectResponse(
+            url=f"{frontend_callback}?error=account_inactive", status_code=302
+        )
+    if not user.email_verified:
+        return RedirectResponse(
+            url=f"{frontend_callback}?error=oauth_failed", status_code=302
+        )
+
+    # Issue JWT pair (same as password login)
+    access_token = create_access_token(
+        data={"sub": str(user.id)},
+        expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
+    )
+    refresh_token = create_refresh_token(
+        data={"sub": str(user.id), "remember_me": False},
+        expires_delta=timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+    )
+
+    params = urlencode({
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+    })
+    return RedirectResponse(url=f"{frontend_callback}?{params}", status_code=302)

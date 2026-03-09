@@ -17,6 +17,7 @@ class TokenPayload(BaseModel):
     sub: str | None = None  # subject (user ID)
     exp: int | None = None  # expiration timestamp
     type: str | None = None  # token type (access or refresh)
+    remember_me: bool = False  # preserve remember_me across refreshes
 
 
 class RefreshTokenRequest(BaseModel):

@@ -16,6 +16,7 @@ class UserBase(BaseModel):
     is_superuser: bool = False
     email_verified: bool = False
     email_scan_notifications: bool = True
+    oauth_provider: str | None = None
 
 
 # Properties to receive via API on creation

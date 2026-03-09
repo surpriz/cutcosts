@@ -119,9 +119,42 @@ async def authenticate_user(
     user = await get_user_by_email(db, email)
     if not user:
         return None
+    if not user.hashed_password:
+        return None
     if not verify_password(password, user.hashed_password):
         return None
     return user
+
+
+async def create_oauth_user(
+    db: AsyncSession,
+    email: str,
+    full_name: str | None,
+    oauth_provider: str,
+) -> User:
+    """
+    Create user from OAuth provider (no password).
+
+    Args:
+        db: Database session
+        email: Verified email from OAuth provider
+        full_name: Display name from OAuth profile
+        oauth_provider: Provider identifier ("google", "github")
+
+    Returns:
+        Created user with email_verified=True and no hashed_password
+    """
+    db_user = User(
+        email=email,
+        hashed_password=None,
+        full_name=full_name,
+        email_verified=True,
+        oauth_provider=oauth_provider,
+    )
+    db.add(db_user)
+    await db.commit()
+    await db.refresh(db_user)
+    return db_user
 
 
 async def is_user_active(user: User) -> bool:

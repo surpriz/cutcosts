@@ -10,6 +10,7 @@ export interface User {
   is_active: boolean;
   is_superuser: boolean;
   email_verified: boolean;
+  oauth_provider: string | null;
   created_at: string;
   subscription?: UserSubscriptionSummary | null;
 }

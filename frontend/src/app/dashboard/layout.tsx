@@ -10,7 +10,7 @@ import { useAuthStore } from "@/stores/useAuthStore";
 import { useAccountStore } from "@/stores/useAccountStore";
 import { useScanStore } from "@/stores/useScanStore";
 import { useOnboardingStore } from "@/stores/useOnboardingStore";
-import { isAuthenticated } from "@/lib/auth";
+import { isAuthenticated, ensureValidToken } from "@/lib/auth";
 import { preferencesAPI } from "@/lib/api";
 
 export default function DashboardLayout({
@@ -25,9 +25,11 @@ export default function DashboardLayout({
   const { isCompleted, dismissed, resetOnboarding, completeOnboarding } = useOnboardingStore();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-  // Debug log
+  // Proactively refresh token before it expires (access token TTL is 15min)
   useEffect(() => {
-    console.log("[DashboardLayout] Mounted", { user });
+    ensureValidToken();
+    const intervalId = setInterval(ensureValidToken, 12 * 60 * 1000);
+    return () => clearInterval(intervalId);
   }, []);
 
   useEffect(() => {
