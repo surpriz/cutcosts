@@ -3,13 +3,14 @@
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from app.api.deps import get_current_user, get_db
 from app.core.config import settings
+from app.core.paywall_dependencies import get_paywall_context
 from app.models.user import User
 from app.crud import all_cloud_resource as crud_inventory
 from app.crud import cloud_account as crud_cloud_account
@@ -20,6 +21,7 @@ from app.schemas.all_cloud_resource import (
     InventoryStats,
     OptimizationRecommendation,
 )
+from app.schemas.paywall import PaywallContext
 from app.models.all_cloud_resource import OptimizationPriority
 
 router = APIRouter()
@@ -98,13 +100,19 @@ async def get_high_cost_resources(
     limit: int = Query(10, ge=1, le=100, description="Maximum number of results"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    paywall_ctx: PaywallContext = Depends(get_paywall_context),
 ) -> list[AllCloudResource]:
     """
     Get high-cost resources above specified threshold.
 
     By default, returns resources costing >$100/month.
-    Useful for identifying expensive resources that may need review.
+    Requires Pro or Enterprise subscription.
     """
+    if not paywall_ctx.is_paid:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="High-cost resource details require a Pro or Enterprise subscription.",
+        )
     # Verify account belongs to user
     account = await crud_cloud_account.get_cloud_account_by_id(db, cloud_account_id, current_user.id)
     if not account or account.user_id != current_user.id:
@@ -130,13 +138,19 @@ async def get_optimizable_resources(
     limit: int = Query(100, ge=1, le=500, description="Maximum number of results"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    paywall_ctx: PaywallContext = Depends(get_paywall_context),
 ) -> list[AllCloudResource]:
     """
     Get resources with optimization opportunities.
 
-    Returns resources that can be optimized to reduce costs,
-    sorted by potential monthly savings (highest first).
+    Returns resources that can be optimized to reduce costs.
+    Requires Pro or Enterprise subscription.
     """
+    if not paywall_ctx.is_paid:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="Optimization details require a Pro or Enterprise subscription.",
+        )
     # Verify account belongs to user
     account = await crud_cloud_account.get_cloud_account_by_id(db, cloud_account_id, current_user.id)
     if not account or account.user_id != current_user.id:
@@ -162,13 +176,19 @@ async def get_all_resources(
     limit: int = Query(100, ge=1, le=500, description="Maximum number of results"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    paywall_ctx: PaywallContext = Depends(get_paywall_context),
 ) -> list[AllCloudResource]:
     """
     Get all cloud resources for an account (with filters).
 
     Returns paginated list of all resources from the latest scan.
-    Supports filtering by type, optimization status, and cost.
+    Requires Pro or Enterprise subscription.
     """
+    if not paywall_ctx.is_paid:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="Resource details require a Pro or Enterprise subscription.",
+        )
     # Verify account belongs to user
     account = await crud_cloud_account.get_cloud_account_by_id(db, cloud_account_id, current_user.id)
     if not account or account.user_id != current_user.id:
@@ -187,12 +207,18 @@ async def get_resource_details(
     resource_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    paywall_ctx: PaywallContext = Depends(get_paywall_context),
 ) -> AllCloudResource:
     """
     Get detailed information for a specific resource.
 
-    Includes full metadata, utilization metrics, and optimization recommendations.
+    Requires Pro or Enterprise subscription.
     """
+    if not paywall_ctx.is_paid:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="Resource details require a Pro or Enterprise subscription.",
+        )
     resource = await crud_inventory.get_resource_by_id(db, resource_id)
     if not resource:
         raise HTTPException(status_code=404, detail="Resource not found")

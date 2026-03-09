@@ -10,13 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_active_user, get_db
 from app.core.rate_limit import scan_limit
-from app.core.subscription_dependencies import check_scan_limit
+from app.core.paywall_dependencies import get_paywall_context
 from app.crud import cloud_account as cloud_account_crud
 from app.crud import scan as scan_crud
 from app.models.scan import ScanType
 from app.models.user import User
+from app.schemas.orphan_resource import redact_orphan_resource
+from app.schemas.paywall import PaywallContext
 from app.schemas.scan import Scan, ScanCreate, ScanProgress, ScanSummary, ScanWithResources
-from app.services.subscription_service import SubscriptionService
 from app.workers.celery_app import celery_app
 from app.workers.tasks import scan_cloud_account
 
@@ -33,17 +34,13 @@ Create a new scan job to detect orphaned cloud resources.
 
 ## Process
 1. Validates cloud account ownership
-2. Checks subscription scan limits
-3. Creates scan record
-4. Queues async Celery task
-5. Returns scan details with task ID
+2. Creates scan record
+3. Queues async Celery task
+4. Returns scan details with task ID
 
 Scans run asynchronously in the background. Use `/scans/{scan_id}/progress` to monitor progress.
 
-## Subscription Limits
-- **Free**: 10 scans/month
-- **Pro**: 100 scans/month
-- **Enterprise**: Unlimited
+Scans are unlimited for all plans. Waste details are gated by subscription.
 
 ## Rate Limiting
 Limited to 10 scans per hour per user.
@@ -81,14 +78,6 @@ Limited to 10 scans per hour per user.
                 }
             }
         },
-        403: {
-            "description": "Scan limit exceeded",
-            "content": {
-                "application/json": {
-                    "example": {"detail": "Monthly scan limit reached. Your Free plan allows 10 scans/month."}
-                }
-            }
-        },
         404: {
             "description": "Cloud account not found",
             "content": {
@@ -113,7 +102,7 @@ async def create_scan(
     response: Response,
     scan_in: ScanCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(check_scan_limit)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> Scan:
     """
     Create a new scan job for a cloud account.
@@ -121,7 +110,7 @@ async def create_scan(
     Validates that the account belongs to the current user and queues
     a background task to perform the scan.
 
-    Checks subscription limits before allowing scan.
+    Scans are unlimited for all plans (pay-for-value model).
     """
     # Verify account belongs to user
     account = await cloud_account_crud.get_cloud_account_by_id(
@@ -139,12 +128,6 @@ async def create_scan(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cloud account is inactive",
         )
-
-    # Increment scan usage counter BEFORE creating scan to prevent race condition
-    # This ensures parallel requests cannot bypass the limit check
-    subscription_service = SubscriptionService(db)
-    await subscription_service.increment_scan_usage(current_user.id)
-    await db.commit()  # Commit immediately to persist the counter
 
     # Create scan record
     scan = await scan_crud.create_scan(db, scan_in)
@@ -210,14 +193,6 @@ Create comprehensive inventory scan for Cost Optimization Hub.
                 }
             }
         },
-        403: {
-            "description": "Scan limit exceeded",
-            "content": {
-                "application/json": {
-                    "example": {"detail": "Monthly scan limit reached"}
-                }
-            }
-        },
         404: {
             "description": "Cloud account not found",
             "content": {
@@ -234,7 +209,7 @@ async def create_inventory_scan(
     response: Response,
     scan_request: InventoryScanRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(check_scan_limit)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> Scan:
     """
     Create a new inventory scan job for Cost Optimization Hub.
@@ -280,10 +255,6 @@ async def create_inventory_scan(
     )
 
     scan = await scan_crud.create_scan(db, scan_in)
-
-    # Increment scan usage counter
-    subscription_service = SubscriptionService(db)
-    await subscription_service.increment_scan_usage(current_user.id)
 
     # Ensure database transaction is fully committed before queuing task
     await db.commit()
@@ -489,9 +460,13 @@ async def get_scan(
     scan_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_active_user)],
+    paywall_ctx: Annotated[PaywallContext, Depends(get_paywall_context)],
 ) -> ScanWithResources:
     """
     Get a specific scan by ID with its orphan resources.
+
+    For free-tier users viewing post-paywall scans, orphan resource details
+    are redacted (resource_id, resource_name, cost set to null).
     """
     scan = await scan_crud.get_scan_by_id(db, scan_id, load_resources=True)
 
@@ -511,6 +486,15 @@ async def get_scan(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to view this scan",
         )
+
+    # Redact orphan resources for free-tier on post-paywall scans
+    if not paywall_ctx.is_paid and scan.created_at >= paywall_ctx.paywall_cutoff_date:
+        scan_data = ScanWithResources.model_validate(scan)
+        return scan_data.model_copy(update={
+            "orphan_resources": [
+                redact_orphan_resource(r) for r in scan.orphan_resources
+            ],
+        })
 
     return scan
 

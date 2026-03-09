@@ -6,6 +6,8 @@ import { useScanStore } from "@/stores/useScanStore";
 import { useResourceStore } from "@/stores/useResourceStore";
 import { useAuthStore } from "@/stores/useAuthStore";
 import { useInventoryStore } from "@/stores/useInventoryStore";
+import useSubscriptionStore from "@/stores/useSubscriptionStore";
+import { WasteTeaserBanner } from "@/components/dashboard/WasteTeaserBanner";
 import {
   Cloud,
   Search,
@@ -93,6 +95,8 @@ export default function DashboardPage() {
   const { stats, fetchStats, resources, fetchResources } = useResourceStore();
   const { highCostResources, fetchHighCostResources } = useInventoryStore();
   const { user } = useAuthStore();
+  const canViewWasteDetails = useSubscriptionStore((s) => s.canViewWasteDetails());
+  const fetchCurrentSubscription = useSubscriptionStore((s) => s.fetchCurrentSubscription);
   const [showWelcome, setShowWelcome] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -106,7 +110,7 @@ export default function DashboardPage() {
       }
 
       setIsLoading(true);
-      await Promise.all([fetchAccounts(), fetchSummary(), fetchStats(), fetchScans(), fetchResources()]);
+      await Promise.all([fetchAccounts(), fetchSummary(), fetchStats(), fetchScans(), fetchResources(), fetchCurrentSubscription()]);
       setIsLoading(false);
 
       // Show welcome banner if no accounts
@@ -142,7 +146,7 @@ export default function DashboardPage() {
     if (account && account.provider in providerBreakdown) {
       providerBreakdown[account.provider as keyof typeof providerBreakdown].count++;
       providerBreakdown[account.provider as keyof typeof providerBreakdown].cost +=
-        resource.estimated_monthly_cost;
+        resource.estimated_monthly_cost ?? 0;
     }
   });
 
@@ -152,10 +156,15 @@ export default function DashboardPage() {
     { name: "GCP", value: providerBreakdown.gcp.count, color: "#ef4444" },
   ].filter((item) => item.value > 0);
 
-  // Get top 5 most expensive resources
-  const topOffenders = resources
-    .sort((a, b) => b.estimated_monthly_cost - a.estimated_monthly_cost)
-    .slice(0, 5);
+  // Paywall state
+  const isPaywalled = !canViewWasteDetails && resources.some((r) => r.is_redacted);
+
+  // Get top 5 most expensive resources (only when not paywalled)
+  const topOffenders = isPaywalled
+    ? []
+    : resources
+        .sort((a, b) => (b.estimated_monthly_cost ?? 0) - (a.estimated_monthly_cost ?? 0))
+        .slice(0, 5);
 
   // Recent activity
   const recentActivity = [
@@ -306,8 +315,17 @@ export default function DashboardPage() {
         })}
       </div>
 
+      {/* Paywall teaser banner for free users with waste */}
+      {isPaywalled && stats && stats.total_resources > 0 && (
+        <WasteTeaserBanner
+          resourceCount={stats.total_resources}
+          monthlyCost={stats.total_monthly_cost}
+          byType={stats.by_type || {}}
+        />
+      )}
+
       {/* Top row: High-Cost Resources (if available) + Top Offenders + Provider Breakdown */}
-      {highCostResources.length > 0 && (
+      {!isPaywalled && highCostResources.length > 0 && (
         <div className="rounded-2xl border-2 border-purple-300 bg-gradient-to-br from-purple-50 to-indigo-50 p-6 shadow-lg">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
@@ -362,8 +380,8 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Top Offenders + Provider Breakdown */}
-      {stats && stats.total_resources > 0 && (
+      {/* Top Offenders + Provider Breakdown (hidden for paywalled users) */}
+      {!isPaywalled && stats && stats.total_resources > 0 && (
         <div className="grid gap-6 lg:grid-cols-2">
           {/* Top Offenders */}
           <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-lg">
@@ -653,8 +671,8 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Annual savings estimate */}
-      {stats && stats.total_monthly_cost > 0 && (
+      {/* Annual savings estimate (hidden for paywalled users — already shown in teaser) */}
+      {!isPaywalled && stats && stats.total_monthly_cost > 0 && (
         <div className="relative overflow-hidden rounded-2xl border-2 border-green-300 bg-gradient-to-br from-green-50 to-emerald-100 p-8 shadow-xl">
           <div className="absolute top-0 right-0 h-40 w-40 bg-green-300 rounded-full blur-3xl opacity-20"></div>
 

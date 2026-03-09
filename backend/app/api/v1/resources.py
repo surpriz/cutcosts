@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_active_user, get_db
+from app.core.paywall_dependencies import get_paywall_context, require_paid_for_resource_actions
 from app.crud import cloud_account as cloud_account_crud
 from app.crud import orphan_resource as orphan_resource_crud
 from app.models.orphan_resource import ResourceStatus
@@ -15,7 +16,9 @@ from app.schemas.orphan_resource import (
     OrphanResource,
     OrphanResourceStats,
     OrphanResourceUpdate,
+    redact_orphan_resource,
 )
+from app.schemas.paywall import PaywallContext
 from app.services.user_action_tracker import track_user_action
 
 router = APIRouter()
@@ -80,6 +83,7 @@ Standard rate limit: 60 requests/minute
 async def list_orphan_resources(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_active_user)],
+    paywall_ctx: Annotated[PaywallContext, Depends(get_paywall_context)],
     cloud_account_id: uuid.UUID | None = Query(None),
     status_filter: ResourceStatus | None = Query(None, alias="status"),
     resource_type: str | None = Query(None),
@@ -160,6 +164,14 @@ async def list_orphan_resources(
 
         result = await db.execute(query.offset(skip).limit(limit))
         resources = list(result.scalars().all())
+
+    # Redact resource details for free-tier users (only for post-paywall resources)
+    if not paywall_ctx.is_paid:
+        return [
+            redact_orphan_resource(r) if r.created_at >= paywall_ctx.paywall_cutoff_date
+            else OrphanResource.model_validate(r)
+            for r in resources
+        ]
 
     return resources
 
@@ -300,12 +312,21 @@ detached EBS volumes ($8/month) sorted by cost.
 async def get_top_cost_resources(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_active_user)],
+    paywall_ctx: Annotated[PaywallContext, Depends(get_paywall_context)],
     cloud_account_id: uuid.UUID | None = Query(None),
     limit: int = Query(10, ge=1, le=50),
 ) -> list[OrphanResource]:
     """
     Get top orphan resources by estimated monthly cost.
+
+    Requires Pro or Enterprise subscription.
     """
+    if not paywall_ctx.is_paid:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="Top cost resources require a Pro or Enterprise subscription.",
+        )
+
     if cloud_account_id:
         # Verify account belongs to user
         account = await cloud_account_crud.get_cloud_account_by_id(
@@ -385,10 +406,19 @@ async def get_orphan_resource(
     resource_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_active_user)],
+    paywall_ctx: Annotated[PaywallContext, Depends(get_paywall_context)],
 ) -> OrphanResource:
     """
     Get a specific orphan resource by ID.
+
+    Requires Pro or Enterprise subscription.
     """
+    if not paywall_ctx.is_paid:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="Resource details require a Pro or Enterprise subscription.",
+        )
+
     resource = await orphan_resource_crud.get_orphan_resource_by_id(db, resource_id)
 
     if not resource:
@@ -469,7 +499,7 @@ async def update_orphan_resource(
     resource_id: uuid.UUID,
     resource_update: OrphanResourceUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_paid_for_resource_actions)],
 ) -> OrphanResource:
     """
     Update an orphan resource (e.g., mark as ignored or for deletion).
@@ -566,7 +596,7 @@ Returns `204 No Content` on success (no response body).
 async def delete_orphan_resource(
     resource_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(get_current_active_user)],
+    current_user: Annotated[User, Depends(require_paid_for_resource_actions)],
 ) -> None:
     """
     Delete an orphan resource record.

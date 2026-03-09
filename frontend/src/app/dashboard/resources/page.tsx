@@ -4,7 +4,9 @@ import { useEffect, useState } from "react";
 import { useResourceStore } from "@/stores/useResourceStore";
 import { useAccountStore } from "@/stores/useAccountStore";
 import { useOnboardingStore } from "@/stores/useOnboardingStore";
+import useSubscriptionStore from "@/stores/useSubscriptionStore";
 import { useDialog } from "@/hooks/useDialog";
+import { PaywallOverlay } from "@/components/subscription";
 import {
   Filter,
   RefreshCw,
@@ -286,6 +288,11 @@ export default function ResourcesPage() {
   } = useResourceStore();
   const { accounts, fetchAccounts } = useAccountStore();
   const { showDestructiveConfirm } = useDialog();
+  const canViewWasteDetails = useSubscriptionStore((s) => s.canViewWasteDetails());
+  const fetchCurrentSubscription = useSubscriptionStore((s) => s.fetchCurrentSubscription);
+
+  // Paywall state
+  const isPaywalled = !canViewWasteDetails && resources.some((r) => r.is_redacted);
 
   const [showFilters, setShowFilters] = useState(false);
 
@@ -293,7 +300,8 @@ export default function ResourcesPage() {
     fetchAccounts();
     fetchResources();
     fetchStats();
-  }, [fetchAccounts, fetchResources, fetchStats]);
+    fetchCurrentSubscription();
+  }, [fetchAccounts, fetchResources, fetchStats, fetchCurrentSubscription]);
 
   // Mark results as reviewed when user visits this page
   useEffect(() => {
@@ -522,17 +530,24 @@ export default function ResourcesPage() {
           </p>
         </div>
       ) : (
-        <div className="space-y-4">
-          {resources.map((resource) => (
-            <ResourceCard
-              key={resource.id}
-              resource={resource}
-              onIgnore={() => handleIgnore(resource.id)}
-              onMarkForDeletion={() => handleMarkForDeletion(resource.id)}
-              onDelete={() => handleDelete(resource.id)}
-            />
-          ))}
-        </div>
+        <PaywallOverlay
+          isLocked={isPaywalled}
+          resourceCount={stats?.total_resources}
+          monthlyCost={stats?.total_monthly_cost}
+          title="Upgrade to see individual resource details"
+        >
+          <div className="space-y-4">
+            {resources.map((resource) => (
+              <ResourceCard
+                key={resource.id}
+                resource={resource}
+                onIgnore={isPaywalled ? undefined : () => handleIgnore(resource.id)}
+                onMarkForDeletion={isPaywalled ? undefined : () => handleMarkForDeletion(resource.id)}
+                onDelete={isPaywalled ? undefined : () => handleDelete(resource.id)}
+              />
+            ))}
+          </div>
+        </PaywallOverlay>
       )}
     </div>
   );
@@ -573,7 +588,8 @@ function ResourceCard({ resource, onIgnore, onMarkForDeletion, onDelete }: any) 
 
   // Calculate cumulative cost lost since creation
   const ageDays = resource.resource_metadata?.age_days;
-  const dailyCost = resource.estimated_monthly_cost / 30;
+  const monthlyCost = resource.estimated_monthly_cost ?? 0;
+  const dailyCost = monthlyCost / 30;
 
   // Show cost even for resources less than 1 day old (age_days = 0)
   // Calculate based on created_at timestamp if age_days is 0
@@ -2405,7 +2421,7 @@ function ResourceCard({ resource, onIgnore, onMarkForDeletion, onDelete }: any) 
           >
             <Eye className="h-5 w-5" />
           </button>
-          {resource.status === "active" && (
+          {onIgnore && resource.status === "active" && (
             <>
               <button
                 onClick={onIgnore}
@@ -2423,13 +2439,15 @@ function ResourceCard({ resource, onIgnore, onMarkForDeletion, onDelete }: any) 
               </button>
             </>
           )}
-          <button
-            onClick={onDelete}
-            className="rounded-lg p-2 text-gray-400 hover:bg-red-100 hover:text-red-600"
-            title="Delete record"
-          >
-            <Trash2 className="h-5 w-5" />
-          </button>
+          {onDelete && (
+            <button
+              onClick={onDelete}
+              className="rounded-lg p-2 text-gray-400 hover:bg-red-100 hover:text-red-600"
+              title="Delete record"
+            >
+              <Trash2 className="h-5 w-5" />
+            </button>
+          )}
         </div>
       </div>
     </div>

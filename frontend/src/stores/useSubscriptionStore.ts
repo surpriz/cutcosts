@@ -25,7 +25,7 @@ const DEFAULT_FREE_SUBSCRIPTION: UserSubscription = {
     description: "Free tier with basic features",
     price_monthly: 0,
     price_yearly: 0,
-    max_scans_per_month: 10,
+    max_scans_per_month: null,
     max_cloud_accounts: 1,
     has_ai_chat: false,
     has_impact_tracking: false,
@@ -80,6 +80,7 @@ interface SubscriptionState {
   // Helper methods
   canScan: () => boolean;
   canAddCloudAccount: () => boolean;
+  canViewWasteDetails: () => boolean;
   hasFeature: (
     feature:
       | "ai_chat"
@@ -224,6 +225,13 @@ const useSubscriptionStore = create<SubscriptionState>((set, get) => ({
     // Note: This would need to check actual account count
     // For now, just return true if plan allows accounts
     return true;
+  },
+
+  // Helper: Check if user can view waste details (Pro/Enterprise only)
+  canViewWasteDetails: () => {
+    const { currentSubscription } = get();
+    if (!currentSubscription) return false;
+    return currentSubscription.plan.name !== "free";
   },
 
   // Helper: Check if user has access to a feature

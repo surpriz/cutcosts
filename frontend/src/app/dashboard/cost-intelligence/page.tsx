@@ -63,6 +63,8 @@ import {
   Legend,
 } from "recharts";
 import type { ResourceType } from "@/types";
+import useSubscriptionStore from "@/stores/useSubscriptionStore";
+import { PaywallOverlay } from "@/components/subscription";
 
 // Resource type icons
 const resourceIcons: Record<ResourceType, any> = {
@@ -215,6 +217,10 @@ export default function CostIntelligencePage() {
     fetchAllResources,
   } = useInventoryStore();
 
+  const canViewWasteDetails = useSubscriptionStore((s) => s.canViewWasteDetails());
+  const fetchCurrentSubscription = useSubscriptionStore((s) => s.fetchCurrentSubscription);
+  const isPaywalled = !canViewWasteDetails;
+
   const [selectedAccountId, setSelectedAccountId] = useState<string>("");
   const [minCostFilter, setMinCostFilter] = useState<number>(100);
   const [priorityFilter, setPriorityFilter] = useState<string>("all");
@@ -223,7 +229,8 @@ export default function CostIntelligencePage() {
 
   useEffect(() => {
     fetchAccounts();
-  }, [fetchAccounts]);
+    fetchCurrentSubscription();
+  }, [fetchAccounts, fetchCurrentSubscription]);
 
   useEffect(() => {
     if (accounts.length > 0 && !selectedAccountId) {
@@ -499,62 +506,69 @@ export default function CostIntelligencePage() {
 
       {/* High Cost Resources Alert */}
       {highCostResources.length > 0 && (
-        <div className="rounded-2xl border-2 border-orange-300 bg-gradient-to-br from-orange-50 to-amber-50 p-8 shadow-lg">
-          <div className="flex items-center gap-3 mb-6">
-            <AlertTriangle className="h-6 w-6 text-orange-600" />
-            <h2 className="text-2xl font-bold text-gray-900">
-              High-Cost Resources Alert
-            </h2>
-          </div>
-          <div className="space-y-3">
-            {highCostResources.map((resource) => {
-              const Icon = resourceIcons[resource.resource_type] || Server;
-              return (
-                <div
-                  key={resource.id}
-                  className="flex items-center justify-between p-4 rounded-xl bg-white shadow-sm hover:shadow-md transition-shadow"
-                >
-                  <div className="flex items-center gap-3">
-                    <Icon className="h-5 w-5 text-gray-600" />
-                    <div>
-                      <p className="font-semibold text-gray-900">
-                        {resource.resource_name ||
-                          formatResourceType(resource.resource_type)}
+        <PaywallOverlay
+          isLocked={isPaywalled}
+          resourceCount={highCostResources.length}
+          monthlyCost={highCostResources.reduce((sum, r) => sum + r.estimated_monthly_cost, 0)}
+          title="High-Cost Resources"
+        >
+          <div className="rounded-2xl border-2 border-orange-300 bg-gradient-to-br from-orange-50 to-amber-50 p-8 shadow-lg">
+            <div className="flex items-center gap-3 mb-6">
+              <AlertTriangle className="h-6 w-6 text-orange-600" />
+              <h2 className="text-2xl font-bold text-gray-900">
+                High-Cost Resources Alert
+              </h2>
+            </div>
+            <div className="space-y-3">
+              {highCostResources.map((resource) => {
+                const Icon = resourceIcons[resource.resource_type] || Server;
+                return (
+                  <div
+                    key={resource.id}
+                    className="flex items-center justify-between p-4 rounded-xl bg-white shadow-sm hover:shadow-md transition-shadow"
+                  >
+                    <div className="flex items-center gap-3">
+                      <Icon className="h-5 w-5 text-gray-600" />
+                      <div>
+                        <p className="font-semibold text-gray-900">
+                          {resource.resource_name ||
+                            formatResourceType(resource.resource_type)}
+                        </p>
+                        <p className="text-sm text-gray-600">
+                          {resource.region} •{" "}
+                          <span
+                            className={`font-medium ${
+                              resource.is_optimizable
+                                ? "text-orange-600"
+                                : "text-green-600"
+                            }`}
+                          >
+                            {resource.is_optimizable
+                              ? "Optimizable"
+                              : "Optimized"}
+                          </span>
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-2xl font-bold text-gray-900">
+                        ${resource.estimated_monthly_cost.toFixed(2)}
                       </p>
-                      <p className="text-sm text-gray-600">
-                        {resource.region} •{" "}
-                        <span
-                          className={`font-medium ${
-                            resource.is_optimizable
-                              ? "text-orange-600"
-                              : "text-green-600"
-                          }`}
-                        >
-                          {resource.is_optimizable
-                            ? "Optimizable"
-                            : "Optimized"}
-                        </span>
-                      </p>
+                      <p className="text-sm text-gray-600">/month</p>
+                      {resource.is_optimizable &&
+                        resource.potential_monthly_savings > 0 && (
+                          <p className="text-sm text-green-600 font-medium">
+                            Save ${resource.potential_monthly_savings.toFixed(2)}
+                            /mo
+                          </p>
+                        )}
                     </div>
                   </div>
-                  <div className="text-right">
-                    <p className="text-2xl font-bold text-gray-900">
-                      ${resource.estimated_monthly_cost.toFixed(2)}
-                    </p>
-                    <p className="text-sm text-gray-600">/month</p>
-                    {resource.is_optimizable &&
-                      resource.potential_monthly_savings > 0 && (
-                        <p className="text-sm text-green-600 font-medium">
-                          Save ${resource.potential_monthly_savings.toFixed(2)}
-                          /mo
-                        </p>
-                      )}
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
-        </div>
+        </PaywallOverlay>
       )}
 
       {/* Cost Breakdown */}
@@ -634,6 +648,12 @@ export default function CostIntelligencePage() {
 
       {/* All Resources with Filters */}
       {allResources.length > 0 && (
+        <PaywallOverlay
+          isLocked={isPaywalled}
+          resourceCount={filteredResources.length}
+          monthlyCost={filteredResources.reduce((sum, r) => sum + r.estimated_monthly_cost, 0)}
+          title="Cost Optimization Details"
+        >
         <div className="rounded-2xl border border-gray-200 bg-white p-8 shadow-lg">
           <div className="flex items-center justify-between mb-6">
             <h2 className="text-2xl font-bold text-gray-900">
@@ -802,6 +822,7 @@ export default function CostIntelligencePage() {
             </div>
           )}
         </div>
+        </PaywallOverlay>
       )}
 
       {/* Empty State */}

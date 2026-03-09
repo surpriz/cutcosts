@@ -11,6 +11,7 @@ import {
   ArrowRight,
   Check,
   Crown,
+  Lock,
   Sparkles,
   X,
 } from "lucide-react";
@@ -34,7 +35,8 @@ interface UpgradeDialogProps {
     | "ai_chat"
     | "impact_tracking"
     | "api_access"
-    | "email_notifications";
+    | "email_notifications"
+    | "waste_details";
   currentPlan?: "free" | "pro" | "enterprise";
 }
 
@@ -118,6 +120,20 @@ export function UpgradeDialog({
             "Scan completion alerts",
             "New orphaned resources detected",
             "Cost threshold notifications",
+          ],
+        };
+      case "waste_details":
+        return {
+          title: "Waste Details Locked",
+          description:
+            "Your scan found orphaned resources. Upgrade to see resource names, IDs, costs, and take action.",
+          icon: Lock,
+          iconColor: "text-orange-600",
+          features: [
+            "Full resource details (IDs, names, regions)",
+            "Per-resource cost breakdown",
+            "Ignore or mark resources for deletion",
+            "Optimization recommendations",
           ],
         };
       default:

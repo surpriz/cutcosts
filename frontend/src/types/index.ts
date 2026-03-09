@@ -409,15 +409,16 @@ export interface OrphanResource {
   scan_id: string;
   cloud_account_id: string;
   resource_type: ResourceType;
-  resource_id: string;
+  resource_id: string | null;
   resource_name: string | null;
   region: string;
-  estimated_monthly_cost: number;
+  estimated_monthly_cost: number | null;
   resource_metadata: Record<string, any> | null;
   status: ResourceStatus;
   created_at: string;
   updated_at: string;
-  confidence_level?: ConfidenceLevel; // Extracted from resource_metadata for convenience
+  confidence_level?: ConfidenceLevel;
+  is_redacted?: boolean;
 }
 
 export interface OrphanResourceUpdate {
