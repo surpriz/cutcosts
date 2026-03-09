@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useInventoryStore } from "@/stores/useInventoryStore";
 import { useAccountStore } from "@/stores/useAccountStore";
 import {
@@ -48,6 +49,8 @@ import {
   Package,
   Cable,
   FileCode,
+  Lock,
+  ArrowRight,
 } from "lucide-react";
 import {
   PieChart as RechartsPie,
@@ -203,6 +206,7 @@ function formatResourceType(type: string): string {
 }
 
 export default function CostIntelligencePage() {
+  const router = useRouter();
   const { accounts, fetchAccounts } = useAccountStore();
   const {
     stats,
@@ -504,6 +508,46 @@ export default function CostIntelligencePage() {
         </div>
       )}
 
+      {/* Paywall Teaser for Free Users */}
+      {isPaywalled && stats && stats.total_resources > 0 && (
+        <div className="rounded-2xl border-2 border-orange-300 bg-gradient-to-br from-orange-50 via-amber-50 to-red-50 p-6 shadow-lg">
+          <div className="flex items-start gap-4">
+            <div className="flex-shrink-0 flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-orange-500 to-red-500 shadow-md">
+              <Lock className="h-6 w-6 text-white" />
+            </div>
+            <div className="flex-1">
+              <h3 className="text-lg font-bold text-gray-900">
+                Optimization Opportunities Detected
+              </h3>
+              <p className="mt-1 text-gray-700">
+                We found{" "}
+                <span className="font-bold text-orange-700">
+                  {stats.total_resources} resource{stats.total_resources > 1 ? "s" : ""}
+                </span>{" "}
+                costing{" "}
+                <span className="font-bold text-red-700">
+                  ${stats.total_monthly_cost.toFixed(2)}/month
+                </span>{" "}
+                with potential savings of{" "}
+                <span className="font-bold text-green-700">
+                  ${stats.potential_monthly_savings.toFixed(2)}/month
+                </span>
+                . Upgrade to see resource names, detailed recommendations, and take action.
+              </p>
+              <div className="mt-4 flex flex-wrap gap-3">
+                <button
+                  onClick={() => router.push("/pricing")}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-orange-500 to-red-500 text-white text-sm font-semibold hover:from-orange-600 hover:to-red-600 transition-colors shadow-md"
+                >
+                  <ArrowRight className="h-4 w-4" />
+                  Unlock Cost Optimization Details
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* High Cost Resources Alert */}
       {highCostResources.length > 0 && (
         <PaywallOverlay
@@ -731,8 +775,8 @@ export default function CostIntelligencePage() {
             {filteredResources.slice(0, 20).map((resource) => {
               const Icon = resourceIcons[resource.resource_type] || Server;
               const colors = getResourceColor(resource);
-              const savingsPercentage = resource.potential_monthly_savings > 0
-                ? (resource.potential_monthly_savings / resource.estimated_monthly_cost) * 100
+              const savingsPercentage = resource.potential_monthly_savings > 0 && resource.estimated_monthly_cost > 0
+                ? Math.min((resource.potential_monthly_savings / resource.estimated_monthly_cost) * 100, 100)
                 : 0;
 
               return (

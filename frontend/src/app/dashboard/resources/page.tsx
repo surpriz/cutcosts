@@ -2367,7 +2367,7 @@ function ResourceCard({ resource, onIgnore, onMarkForDeletion, onDelete }: any) 
                 <div className="flex items-center gap-1">
                   <span className="text-gray-500">Future waste:</span>
                   <span className="font-semibold text-orange-600" title="Estimated monthly cost if this resource stays orphaned">
-                    ${resource.estimated_monthly_cost.toFixed(2)}/month
+                    ${(resource.estimated_monthly_cost ?? 0).toFixed(2)}/month
                   </span>
                 </div>
                 {cumulativeCost !== null && displayAge && (

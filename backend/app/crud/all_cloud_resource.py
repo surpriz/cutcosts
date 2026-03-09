@@ -166,6 +166,7 @@ async def get_high_cost_resources(
             and_(
                 AllCloudResource.cloud_account_id == cloud_account_id,
                 AllCloudResource.estimated_monthly_cost >= min_cost,
+                AllCloudResource.is_optimizable == True,
             )
         )
         .order_by(AllCloudResource.estimated_monthly_cost.desc())

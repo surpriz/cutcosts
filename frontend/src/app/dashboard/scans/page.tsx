@@ -5,9 +5,13 @@ import { useAccountStore } from "@/stores/useAccountStore";
 import { useScanStore } from "@/stores/useScanStore";
 import { ScanProgressModal } from "@/components/dashboard/ScanProgressModal";
 import { scansAPI } from "@/lib/api";
+import useSubscriptionStore from "@/stores/useSubscriptionStore";
+import { useRouter } from "next/navigation";
 import { useDialog } from "@/hooks/useDialog";
 import {
   Play,
+  Lock,
+  ArrowRight,
   RefreshCw,
   CheckCircle,
   XCircle,
@@ -26,6 +30,9 @@ export default function ScansPage() {
   const { accounts, fetchAccounts } = useAccountStore();
   const { scans, fetchScans, createScan, deleteAllScans, summary, fetchSummary, isLoading } =
     useScanStore();
+  const canViewWasteDetails = useSubscriptionStore((s) => s.canViewWasteDetails());
+  const fetchCurrentSubscription = useSubscriptionStore((s) => s.fetchCurrentSubscription);
+  const router = useRouter();
   const { showAlert, showConfirm, showDestructiveConfirm } = useDialog();
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   const [isDeletingAll, setIsDeletingAll] = useState(false);
@@ -37,7 +44,8 @@ export default function ScansPage() {
     fetchAccounts();
     fetchScans();
     fetchSummary();
-  }, [fetchAccounts, fetchScans, fetchSummary]);
+    fetchCurrentSubscription();
+  }, [fetchAccounts, fetchScans, fetchSummary, fetchCurrentSubscription]);
 
   // Auto-refresh scans if there are any in progress or pending
   useEffect(() => {
@@ -440,6 +448,8 @@ function ScanRow({ scan, onViewProgress }: any) {
   const { accounts } = useAccountStore();
   const { deleteScan, fetchScans } = useScanStore();
   const { showDestructiveConfirm } = useDialog();
+  const canViewWasteDetails = useSubscriptionStore((s) => s.canViewWasteDetails());
+  const router = useRouter();
   const [isDeleting, setIsDeleting] = useState(false);
   const [progress, setProgress] = useState<any>(null);
   const account = accounts.find((a) => a.id === scan.cloud_account_id);
@@ -633,6 +643,33 @@ function ScanRow({ scan, onViewProgress }: any) {
             Future savings: ${scan.estimated_monthly_waste.toFixed(2)}/month
             (${(scan.estimated_monthly_waste * 12).toFixed(2)}/year) if cleaned up now
           </p>
+          <div className="ml-6 mt-3 flex flex-wrap gap-2">
+            {canViewWasteDetails ? (
+              <button
+                onClick={() => router.push("/dashboard/resources")}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-600 text-white text-xs font-semibold hover:bg-orange-700 transition-colors"
+              >
+                <ArrowRight className="h-3.5 w-3.5" />
+                View Waste Details
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={() => router.push("/pricing")}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-orange-500 to-red-500 text-white text-xs font-semibold hover:from-orange-600 hover:to-red-600 transition-colors"
+                >
+                  <Lock className="h-3.5 w-3.5" />
+                  Unlock Full Report
+                </button>
+                <button
+                  onClick={() => router.push("/dashboard/resources")}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-orange-300 text-orange-700 text-xs font-semibold hover:bg-orange-50 transition-colors"
+                >
+                  See Aggregates
+                </button>
+              </>
+            )}
+          </div>
         </div>
       )}
 

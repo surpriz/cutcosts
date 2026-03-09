@@ -38,7 +38,7 @@ export function calculateCostByType(
   resources.forEach((resource) => {
     const existing = costMap.get(resource.resource_type) || { cost: 0, count: 0 };
     costMap.set(resource.resource_type, {
-      cost: existing.cost + resource.estimated_monthly_cost,
+      cost: existing.cost + (resource.estimated_monthly_cost ?? 0),
       count: existing.count + 1,
     });
   });
@@ -147,6 +147,34 @@ export function prepareTypeDistributionData(
 }
 
 /**
+ * Normalize a region string to Title Case display name.
+ * Handles both "francecentral" and "France Central" formats.
+ */
+function normalizeRegionName(region: string): string {
+  if (region.includes(" ")) return region;
+  const knownWords = [
+    "east", "west", "north", "south", "central", "france", "germany", "japan",
+    "korea", "brazil", "canada", "australia", "india", "europe", "us", "uk",
+    "uae", "switzerland", "norway", "sweden", "qatar", "poland", "italy",
+    "israel", "mexico", "zealand", "africa",
+  ];
+  let remaining = region.toLowerCase();
+  const parts: string[] = [];
+  while (remaining.length > 0) {
+    const match = knownWords.find((w) => remaining.startsWith(w));
+    if (match) {
+      parts.push(match.charAt(0).toUpperCase() + match.slice(1));
+      remaining = remaining.slice(match.length);
+    } else {
+      // Take remaining as one word (e.g., "2" in "eastus2")
+      parts.push(remaining.charAt(0).toUpperCase() + remaining.slice(1));
+      break;
+    }
+  }
+  return parts.join(" ");
+}
+
+/**
  * Prepare data for region distribution chart
  */
 export function prepareRegionDistributionData(
@@ -154,11 +182,14 @@ export function prepareRegionDistributionData(
 ): Array<{ name: string; value: number }> {
   if (!stats || !stats.by_region) return [];
 
-  return Object.entries(stats.by_region)
-    .map(([region, count]) => ({
-      name: region,
-      value: count,
-    }))
+  const merged: Record<string, number> = {};
+  for (const [region, count] of Object.entries(stats.by_region)) {
+    const normalized = normalizeRegionName(region);
+    merged[normalized] = (merged[normalized] || 0) + count;
+  }
+
+  return Object.entries(merged)
+    .map(([name, value]) => ({ name, value }))
     .sort((a, b) => b.value - a.value);
 }
 

@@ -63,12 +63,17 @@ if [ -f "$ENCRYPTION_KEY_FILE" ]; then
 
         if [ -n "$ENV_KEY" ] && [ "$ENV_KEY" != "$EXISTING_KEY" ]; then
             echo "⚠️  WARNING: ENCRYPTION_KEY in .env differs from persistent key!"
-            echo "   This will cause data loss. Overwriting .env with persistent key..."
+            echo "   Overriding with persistent key via environment variable..."
 
-            # Replace ENCRYPTION_KEY in .env with persistent key
-            sed -i.bak "s|^ENCRYPTION_KEY=.*|ENCRYPTION_KEY=$EXISTING_KEY|" "$ENV_FILE"
-            echo "✅ Updated ENCRYPTION_KEY in .env to match persistent key"
+            # Try to update .env, but don't fail if it's read-only or in a container
+            if sed -i.bak "s|^ENCRYPTION_KEY=.*|ENCRYPTION_KEY=$EXISTING_KEY|" "$ENV_FILE" 2>/dev/null; then
+                echo "✅ Updated ENCRYPTION_KEY in .env to match persistent key"
+            else
+                echo "ℹ️  Could not update .env file (read-only or container mount). Using env export."
+            fi
         fi
+    else
+        echo "ℹ️  No .env file found (using Docker env_file). Skipping .env update."
     fi
 
     # Export for use
@@ -94,12 +99,15 @@ else
     if [ -f "$ENV_FILE" ]; then
         if grep -q "^ENCRYPTION_KEY=" "$ENV_FILE"; then
             # Replace existing ENCRYPTION_KEY
-            sed -i.bak "s|^ENCRYPTION_KEY=.*|ENCRYPTION_KEY=$NEW_KEY|" "$ENV_FILE"
+            if sed -i.bak "s|^ENCRYPTION_KEY=.*|ENCRYPTION_KEY=$NEW_KEY|" "$ENV_FILE" 2>/dev/null; then
+                echo "✅ Updated ENCRYPTION_KEY in $ENV_FILE"
+            else
+                echo "ℹ️  Could not update .env file. Using env export."
+            fi
         else
             # Add ENCRYPTION_KEY if missing
-            echo "ENCRYPTION_KEY=$NEW_KEY" >> "$ENV_FILE"
+            echo "ENCRYPTION_KEY=$NEW_KEY" >> "$ENV_FILE" 2>/dev/null || true
         fi
-        echo "✅ Updated ENCRYPTION_KEY in $ENV_FILE"
     fi
 
     # Export for use

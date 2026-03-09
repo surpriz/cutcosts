@@ -54,7 +54,7 @@ const inventoryAPI = {
         },
       }
     );
-    if (!response.ok) throw new Error("Failed to fetch high-cost resources");
+    if (!response.ok) throw new Error(`${response.status}: Failed to fetch high-cost resources`);
     return response.json();
   },
 
@@ -70,7 +70,7 @@ const inventoryAPI = {
         },
       }
     );
-    if (!response.ok) throw new Error("Failed to fetch optimizable resources");
+    if (!response.ok) throw new Error(`${response.status}: Failed to fetch optimizable resources`);
     return response.json();
   },
 
@@ -95,7 +95,7 @@ const inventoryAPI = {
         Authorization: `Bearer ${localStorage.getItem("access_token")}`,
       },
     });
-    if (!response.ok) throw new Error("Failed to fetch all resources");
+    if (!response.ok) throw new Error(`${response.status}: Failed to fetch all resources`);
     return response.json();
   },
 
@@ -105,7 +105,7 @@ const inventoryAPI = {
         Authorization: `Bearer ${localStorage.getItem("access_token")}`,
       },
     });
-    if (!response.ok) throw new Error("Failed to fetch resource details");
+    if (!response.ok) throw new Error(`${response.status}: Failed to fetch resource details`);
     return response.json();
   },
 
@@ -206,10 +206,15 @@ export const useInventoryStore = create<InventoryState>((set, get) => ({
       );
       set({ highCostResources, isLoading: false });
     } catch (error: any) {
-      set({
-        error: error.message || "Failed to fetch high-cost resources",
-        isLoading: false,
-      });
+      // 402 = paywall (free user) — not an error, just no access
+      if (error.message?.includes("402")) {
+        set({ highCostResources: [], isLoading: false });
+      } else {
+        set({
+          error: error.message || "Failed to fetch high-cost resources",
+          isLoading: false,
+        });
+      }
     }
   },
 
@@ -223,10 +228,14 @@ export const useInventoryStore = create<InventoryState>((set, get) => ({
         await inventoryAPI.getOptimizableResources(cloudAccountId, limit);
       set({ optimizableResources, isLoading: false });
     } catch (error: any) {
-      set({
-        error: error.message || "Failed to fetch optimizable resources",
-        isLoading: false,
-      });
+      if (error.message?.startsWith("402")) {
+        set({ optimizableResources: [], isLoading: false });
+      } else {
+        set({
+          error: error.message || "Failed to fetch optimizable resources",
+          isLoading: false,
+        });
+      }
     }
   },
 
@@ -236,10 +245,14 @@ export const useInventoryStore = create<InventoryState>((set, get) => ({
       const allResources = await inventoryAPI.getAllResources(filters);
       set({ allResources, filters, isLoading: false });
     } catch (error: any) {
-      set({
-        error: error.message || "Failed to fetch all resources",
-        isLoading: false,
-      });
+      if (error.message?.startsWith("402")) {
+        set({ allResources: [], isLoading: false });
+      } else {
+        set({
+          error: error.message || "Failed to fetch all resources",
+          isLoading: false,
+        });
+      }
     }
   },
 
@@ -250,10 +263,14 @@ export const useInventoryStore = create<InventoryState>((set, get) => ({
         await inventoryAPI.getResourceDetails(resourceId);
       set({ selectedResource, isLoading: false });
     } catch (error: any) {
-      set({
-        error: error.message || "Failed to fetch resource details",
-        isLoading: false,
-      });
+      if (error.message?.startsWith("402")) {
+        set({ selectedResource: null, isLoading: false });
+      } else {
+        set({
+          error: error.message || "Failed to fetch resource details",
+          isLoading: false,
+        });
+      }
     }
   },
 

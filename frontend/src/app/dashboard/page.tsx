@@ -520,7 +520,7 @@ export default function DashboardPage() {
                 // Calculate cost for this type
                 const typeCost = resources
                   .filter((r) => r.resource_type === type)
-                  .reduce((sum, r) => sum + r.estimated_monthly_cost, 0);
+                  .reduce((sum, r) => sum + (r.estimated_monthly_cost ?? 0), 0);
 
                 // Get provider for this resource type
                 const firstResource = resources.find((r) => r.resource_type === type);
@@ -545,7 +545,11 @@ export default function DashboardPage() {
                       <div className="flex items-center gap-4">
                         <span className="text-sm text-gray-600">{count} resources</span>
                         <span className="font-bold text-gray-900 min-w-[80px] text-right">
-                          ${typeCost.toFixed(2)}/mo
+                          {isPaywalled ? (
+                            <span className="text-gray-400 text-xs">Upgrade to see</span>
+                          ) : (
+                            `$${typeCost.toFixed(2)}/mo`
+                          )}
                         </span>
                       </div>
                     </div>
