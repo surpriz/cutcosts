@@ -14,16 +14,16 @@ interface Feature {
 const features: Feature[] = [
   {
     icon: Search,
-    title: "Intelligent Detection",
+    title: "Unlimited Free Scans",
     description:
-      "Detect 400+ resource types across AWS, Azure & GCP with CloudWatch-powered analysis and smart heuristics.",
+      "Scan as often as you want, across all your cloud accounts. No scan limits, no quotas. If everything is green, it stays free.",
     accent: "cyan",
   },
   {
     icon: DollarSign,
-    title: "Cost Analytics",
+    title: "Pay Only for Value",
     description:
-      'Get precise "Future waste" and "Already wasted" calculations with confidence levels for informed decisions.',
+      "We only charge when we find waste. See aggregated savings potential for free, unlock detailed resource-level insights with a paid plan.",
     accent: "emerald",
   },
   {

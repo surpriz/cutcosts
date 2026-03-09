@@ -54,8 +54,8 @@ export function CTASection() {
             ${isInView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-6"}
           `}
         >
-          Join hundreds of teams saving thousands monthly by eliminating cloud
-          waste. Start your free trial today.
+          Scan unlimited. Pay nothing if your cloud is clean.
+          Upgrade only when we find real savings.
         </p>
 
         {/* CTA Button */}
@@ -81,7 +81,7 @@ export function CTASection() {
             "
           >
             <Zap className="h-5 w-5" />
-            Start Saving Now - It&apos;s Free
+            Scan for Free Now
             <ArrowRight className="h-5 w-5 transition-transform group-hover:translate-x-1" />
           </Link>
         </div>
@@ -96,15 +96,15 @@ export function CTASection() {
         >
           <span className="flex items-center gap-2">
             <CheckIcon />
+            Unlimited free scans
+          </span>
+          <span className="flex items-center gap-2">
+            <CheckIcon />
             No credit card required
           </span>
           <span className="flex items-center gap-2">
             <CheckIcon />
-            Setup in under 2 minutes
-          </span>
-          <span className="flex items-center gap-2">
-            <CheckIcon />
-            Cancel anytime
+            Pay only when we find waste
           </span>
         </div>
       </div>

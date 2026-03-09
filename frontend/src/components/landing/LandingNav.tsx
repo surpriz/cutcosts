@@ -68,7 +68,7 @@ export function LandingNav() {
                 hover:shadow-lg hover:shadow-cyan-500/25
               "
             >
-              Start Free Trial
+              Scan for Free
             </Link>
           </div>
         </div>

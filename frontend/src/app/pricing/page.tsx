@@ -65,43 +65,37 @@ export default function PricingPage() {
     return currentSubscription?.plan.name === planName;
   };
 
-  const getPlanFeatures = (plan: any) => {
-    const features = [];
+  const getPlanFeatures = (plan: (typeof plans)[number]) => {
+    const features: string[] = [];
 
-    // Scans
-    if (plan.max_scans_per_month === null) {
-      features.push("Unlimited scans per month");
-    } else {
-      features.push(`${plan.max_scans_per_month} scans per month`);
-    }
+    // All plans get unlimited scans
+    features.push("Unlimited scans");
 
     // Cloud accounts
     if (plan.max_cloud_accounts === null) {
       features.push("Unlimited cloud accounts");
     } else {
-      features.push(`Up to ${plan.max_cloud_accounts} cloud accounts`);
+      features.push(`Up to ${plan.max_cloud_accounts} cloud account${plan.max_cloud_accounts > 1 ? "s" : ""}`);
     }
 
-    // Features
-    if (plan.has_ai_chat) {
-      features.push("AI Chat Assistant");
-    }
-    if (plan.has_impact_tracking) {
-      features.push("Environmental Impact Tracking");
-    }
-    if (plan.has_email_notifications) {
-      features.push("Email notifications");
-    }
-    if (plan.has_api_access) {
-      features.push("API Access");
-    }
-    if (plan.has_priority_support) {
-      features.push("Priority Support");
+    if (plan.name === "free") {
+      // Free-specific features
+      features.push("Waste summary & aggregates");
+      features.push("Resource count by type");
+      features.push("Total savings potential");
+    } else {
+      // Paid features
+      features.push("Full resource details (IDs, names, costs)");
+      features.push("Take action on wasteful resources");
+      features.push("Cost Intelligence dashboard");
     }
 
-    // Basic features for all plans
-    features.push("Orphaned resource detection");
-    features.push("Cost optimization insights");
+    // Plan-specific features
+    if (plan.has_ai_chat) features.push("AI Chat Assistant");
+    if (plan.has_impact_tracking) features.push("Environmental Impact Tracking");
+    if (plan.has_email_notifications) features.push("Email notifications");
+    if (plan.has_api_access) features.push("API Access");
+    if (plan.has_priority_support) features.push("Priority Support");
 
     return features;
   };
@@ -132,11 +126,11 @@ export default function PricingPage() {
         {/* Header */}
         <div className="text-center mb-12">
           <h1 className="text-4xl font-bold text-gray-900 mb-4">
-            Choose Your Plan
+            Scan Free. Pay Only for Value.
           </h1>
           <p className="text-xl text-gray-600 max-w-2xl mx-auto">
-            Start detecting cloud waste and optimizing your infrastructure costs
-            today.
+            All scans are unlimited and free. If we don&apos;t find waste, you never pay.
+            Upgrade only to unlock detailed resource insights and take action.
           </p>
         </div>
 
@@ -225,6 +219,21 @@ export default function PricingPage() {
           </h2>
           <div className="space-y-6">
             <div>
+              <h3 className="font-semibold mb-2">Are scans really free and unlimited?</h3>
+              <p className="text-gray-600">
+                Yes. You can scan your cloud accounts as often as you want at no cost.
+                If no waste is detected, you never pay anything.
+              </p>
+            </div>
+            <div>
+              <h3 className="font-semibold mb-2">What do I see on the free plan?</h3>
+              <p className="text-gray-600">
+                You see aggregated results: total number of wasteful resources, savings
+                potential by type, and total monthly cost. Individual resource details
+                (names, IDs, exact costs) require a paid plan.
+              </p>
+            </div>
+            <div>
               <h3 className="font-semibold mb-2">Can I change my plan later?</h3>
               <p className="text-gray-600">
                 Yes, you can upgrade or downgrade your plan at any time. Changes
@@ -241,15 +250,8 @@ export default function PricingPage() {
             <div>
               <h3 className="font-semibold mb-2">Can I cancel anytime?</h3>
               <p className="text-gray-600">
-                Yes, you can cancel your subscription at any time. You'll
+                Yes, you can cancel your subscription at any time. You&apos;ll
                 continue to have access until the end of your billing period.
-              </p>
-            </div>
-            <div>
-              <h3 className="font-semibold mb-2">Is my payment information secure?</h3>
-              <p className="text-gray-600">
-                Absolutely. We use Stripe for payment processing, which is
-                PCI-DSS Level 1 certified. We never store your payment details.
               </p>
             </div>
           </div>

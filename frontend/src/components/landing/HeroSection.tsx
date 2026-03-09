@@ -69,10 +69,10 @@ export function HeroSection() {
             ${isInView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}
           `}
         >
-          Detect <span className="text-zinc-50">400+ orphaned resources</span>{" "}
-          across AWS, Azure & GCP automatically.
+          Scan your cloud for free.{" "}
+          <span className="text-zinc-50">Only pay when we find waste.</span>
           <br className="hidden sm:block" />
-          Stop paying for resources you&apos;re not using.
+          400+ resource types across AWS, Azure & GCP.
         </p>
 
         {/* CTAs */}
@@ -97,7 +97,7 @@ export function HeroSection() {
             "
           >
             <Zap className="h-5 w-5" />
-            Start Free Trial
+            Scan for Free
             <span className="absolute -top-1 -right-1 flex h-3 w-3">
               <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 animate-ping" />
               <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-400" />
@@ -129,9 +129,9 @@ export function HeroSection() {
             ${isInView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}
           `}
         >
+          <TrustSignal icon={Zap} text="Unlimited Free Scans" />
           <TrustSignal icon={Shield} text="100% Read-Only" />
-          <TrustSignal icon={Lock} text="Bank-Level Security" />
-          <TrustSignal icon={Zap} text="Setup in 2 Minutes" />
+          <TrustSignal icon={Lock} text="Pay Only for Value" />
         </div>
       </div>
 

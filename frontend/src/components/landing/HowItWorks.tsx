@@ -14,23 +14,23 @@ interface Step {
 const steps: Step[] = [
   {
     number: "01",
-    title: "Connect Your Cloud Accounts",
+    title: "Connect & Scan for Free",
     description:
-      "Add AWS, Azure or GCP credentials with read-only permissions. We never modify or delete anything.",
+      "Add your AWS, Azure or GCP credentials with read-only permissions. Run unlimited scans at no cost.",
     icon: CloudCog,
   },
   {
     number: "02",
-    title: "Run Intelligent Scan",
+    title: "See Your Waste Summary",
     description:
-      "CloudWatch-powered scanner analyzes 400+ resource types to identify orphaned resources with precision.",
+      "Get an instant overview: number of wasteful resources, total cost by type, and savings potential - all free.",
     icon: ScanLine,
   },
   {
     number: "03",
-    title: "Review & Take Action",
+    title: "Unlock Details & Act",
     description:
-      'Get confidence-rated detections with "Future waste" and "Already wasted" cost calculations.',
+      "Upgrade to see resource names, IDs, exact costs and take action. No waste found? You never pay a cent.",
     icon: ListChecks,
   },
 ];
