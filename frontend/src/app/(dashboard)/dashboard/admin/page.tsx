@@ -147,6 +147,24 @@ export default function AdminPage() {
     setBonusDialogOpen(true);
   };
 
+  const handleChangePlan = async (userId: string, newPlan: string) => {
+    setActionLoading(userId);
+    try {
+      await adminAPI.changeUserPlan(userId, newPlan);
+      await loadData();
+    } catch (err) {
+      console.error("Failed to change plan:", err);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const planSelectStyles: Record<string, string> = {
+    free: "bg-gray-100 text-gray-700 border-gray-200",
+    pro: "bg-blue-100 text-blue-700 border-blue-200",
+    enterprise: "bg-purple-100 text-purple-700 border-purple-200",
+  };
+
   const getPlanBadge = (planName: string) => {
     const badges: Record<string, { bg: string; text: string; label: string }> = {
       free: { bg: "bg-gray-100", text: "text-gray-700", label: "Free" },
@@ -811,7 +829,16 @@ export default function AdminPage() {
                       )}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      {getPlanBadge(user.subscription?.plan?.name || "free")}
+                      <select
+                        value={user.subscription?.plan?.name || "free"}
+                        onChange={(e) => handleChangePlan(user.id, e.target.value)}
+                        disabled={actionLoading === user.id}
+                        className={`text-xs font-medium rounded-full px-2.5 py-1 border cursor-pointer outline-none disabled:opacity-50 disabled:cursor-not-allowed ${planSelectStyles[user.subscription?.plan?.name || "free"] || planSelectStyles.free}`}
+                      >
+                        <option value="free">Free</option>
+                        <option value="pro">Pro</option>
+                        <option value="enterprise">Enterprise</option>
+                      </select>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       {user.subscription?.plan?.max_scans_per_month === null ? (

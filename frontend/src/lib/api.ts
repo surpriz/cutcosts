@@ -593,6 +593,16 @@ export const adminAPI = {
     );
   },
 
+  async changeUserPlan(
+    userId: string,
+    planName: string
+  ): Promise<{ user_id: string; old_plan: string; new_plan: string; message: string }> {
+    return fetchAPI(`/api/v1/admin/users/${userId}/plan`, {
+      method: "PUT",
+      body: JSON.stringify({ plan_name: planName }),
+    });
+  },
+
   // Pricing management
   async getPricingStats(): Promise<import("@/types").PricingStats> {
     return fetchAPI<import("@/types").PricingStats>("/api/v1/admin/pricing/stats");

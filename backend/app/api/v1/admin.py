@@ -311,6 +311,68 @@ async def add_user_bonus_scans(
         )
 
 
+class ChangePlanRequest(BaseModel):
+    """Request schema for changing a user's subscription plan."""
+
+    plan_name: str
+
+
+class ChangePlanResponse(BaseModel):
+    """Response schema for plan change."""
+
+    user_id: uuid.UUID
+    old_plan: str
+    new_plan: str
+    message: str
+
+
+@router.put(
+    "/users/{user_id}/plan",
+    response_model=ChangePlanResponse,
+    summary="Change a user's subscription plan",
+)
+async def change_user_plan(
+    user_id: uuid.UUID,
+    request: ChangePlanRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_superuser)],
+) -> ChangePlanResponse:
+    """Change a user's subscription plan (superuser only).
+
+    Allows admins to upgrade or downgrade any user's plan
+    without going through Stripe.
+    """
+    target_user = await user_crud.get_user_by_id(db, user_id)
+    if not target_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+
+    subscription_service = SubscriptionService(db)
+
+    new_plan = await subscription_service.get_plan_by_name(request.plan_name)
+    if not new_plan:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Plan '{request.plan_name}' not found",
+        )
+
+    subscription = await subscription_service.get_or_create_user_subscription(user_id)
+    old_plan_name = subscription.plan.name
+
+    subscription.plan_id = new_plan.id
+    await db.commit()
+    await db.refresh(subscription)
+
+    return ChangePlanResponse(
+        user_id=user_id,
+        old_plan=old_plan_name,
+        new_plan=request.plan_name,
+        message=f"Plan changed from {old_plan_name} to {request.plan_name}",
+    )
+
+
 class MLDataStats(BaseModel):
     """ML data collection statistics schema."""
 
