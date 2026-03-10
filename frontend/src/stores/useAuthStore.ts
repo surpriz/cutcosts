@@ -74,10 +74,14 @@ export const useAuthStore = create<AuthState>((set) => ({
       useOnboardingStore.getState().resetOnboarding();
     });
 
-    // Call API logout and clear localStorage
+    // Call API logout and clear localStorage (preserve login method hint)
     authAPI.logout();
     if (typeof window !== "undefined") {
+      const lastLoginMethod = localStorage.getItem("last_login_method");
       localStorage.clear();
+      if (lastLoginMethod) {
+        localStorage.setItem("last_login_method", lastLoginMethod);
+      }
       window.location.href = "/auth/login";
     }
   },

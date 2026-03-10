@@ -5,6 +5,7 @@
 .env.prod
 *.env
 *.env.bak
+*.env.old
 .env.bak
 
 # Encryption Key (CRITICAL - Never commit!)

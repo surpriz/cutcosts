@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect } from "react";
+import { Suspense, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { setAuthTokens } from "@/lib/api";
 import { useAuthStore } from "@/stores/useAuthStore";
@@ -11,8 +11,12 @@ function OAuthCallbackContent() {
   const searchParams = useSearchParams();
   const fetchCurrentUser = useAuthStore((state) => state.fetchCurrentUser);
   const { redirectIfNeeded } = useOnboardingRedirect();
+  const processed = useRef(false);
 
   useEffect(() => {
+    if (processed.current) return;
+    processed.current = true;
+
     const accessToken = searchParams.get("access_token");
     const refreshToken = searchParams.get("refresh_token");
     const error = searchParams.get("error");
@@ -45,12 +49,13 @@ function OAuthCallbackContent() {
       return;
     }
 
-    // Store tokens
+    // Store tokens and remember login method
     setAuthTokens({
       access_token: accessToken,
       refresh_token: refreshToken,
       token_type: "bearer",
     });
+    localStorage.setItem("last_login_method", "google");
 
     // Remove tokens from URL for security
     window.history.replaceState({}, "", "/auth/oauth-callback");
@@ -59,7 +64,8 @@ function OAuthCallbackContent() {
     fetchCurrentUser().then(() => {
       redirectIfNeeded();
     });
-  }, [searchParams, router, fetchCurrentUser, redirectIfNeeded]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="flex min-h-[400px] items-center justify-center">
